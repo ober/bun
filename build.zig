@@ -165,6 +165,7 @@ pub fn build(b: *Build) !void {
             .macos => .mac,
             .linux => .linux,
             .windows => .windows,
+            .freebsd => .freebsd,
             else => |t| std.debug.panic("Unsupported OS tag {}", .{t}),
         };
         const abi = temp_resolved.result.abi;

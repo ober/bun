@@ -13,6 +13,10 @@ pub const isWasi = build_target == .wasi;
 pub const isMac = build_target == .native and builtin.target.os.tag == .macos;
 pub const isBrowser = !isWasi and isWasm;
 pub const isWindows = builtin.target.os.tag == .windows;
+pub const isFreeBSD = builtin.target.os.tag == .freebsd;
+pub const isBSD = isFreeBSD;
+/// True on platforms that use kqueue for I/O event notification (macOS and FreeBSD).
+pub const hasKqueue = isMac or isFreeBSD;
 pub const isPosix = !isWindows and !isWasm;
 pub const isDebug = builtin.mode == .Debug;
 pub const isTest = builtin.is_test;
@@ -69,6 +73,7 @@ pub const OperatingSystem = enum {
     mac,
     linux,
     windows,
+    freebsd,
     // wAsM is nOt aN oPeRaTiNg SyStEm
     wasm,
 
@@ -87,6 +92,8 @@ pub const OperatingSystem = enum {
         .{ "Linux", .linux },
         .{ "linux-gnu", .linux },
         .{ "gnu/linux", .linux },
+        .{ "freebsd", .freebsd },
+        .{ "FreeBSD", .freebsd },
         .{ "wasm", .wasm },
     });
 
@@ -96,6 +103,7 @@ pub const OperatingSystem = enum {
             .mac => "macOS",
             .linux => "Linux",
             .windows => "Windows",
+            .freebsd => "FreeBSD",
             .wasm => "WASM",
         };
     }
@@ -106,6 +114,7 @@ pub const OperatingSystem = enum {
             .mac => "darwin",
             .linux => "linux",
             .windows => "win32",
+            .freebsd => "freebsd",
             .wasm => "wasm",
         };
     }
@@ -115,6 +124,7 @@ pub const OperatingSystem = enum {
             .mac => .macos,
             .linux => .linux,
             .windows => .windows,
+            .freebsd => .freebsd,
             .wasm => unreachable,
         };
     }
@@ -125,6 +135,7 @@ pub const OperatingSystem = enum {
             .mac => "darwin",
             .linux => "linux",
             .windows => "windows",
+            .freebsd => "freebsd",
             .wasm => "wasm",
         };
     }
@@ -136,6 +147,8 @@ else if (isLinux)
     .linux
 else if (isWindows)
     .windows
+else if (isFreeBSD)
+    .freebsd
 else if (isWasm)
     .wasm
 else

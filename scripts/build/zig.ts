@@ -45,6 +45,7 @@ export function zigTarget(cfg: Config): string {
   const arch = cfg.x64 ? "x86_64" : "aarch64";
   if (cfg.darwin) return `${arch}-macos-none`;
   if (cfg.windows) return `${arch}-windows-msvc`;
+  if (cfg.freebsd) return `${arch}-freebsd-none`;
   // linux: abi is always set (resolveConfig asserts)
   assert(cfg.abi !== undefined, "linux build missing abi");
   return `${arch}-linux-${cfg.abi}`;
@@ -91,6 +92,7 @@ export function zigCpu(cfg: Config): string {
   if (cfg.arm64) {
     if (cfg.darwin) return "apple_m1";
     if (cfg.windows) return "cortex_a76";
+    // freebsd and linux: use native
     return "native";
   }
   // x64
@@ -164,6 +166,11 @@ function zigDownloadUrl(cfg: Config, safe: boolean): string {
     osAbi = "macos-none";
   } else if (cfg.host.os === "windows") {
     osAbi = "windows-gnu";
+  } else if (cfg.host.os === "freebsd") {
+    // FreeBSD: use the freebsd-none binary (static).
+    // If oven-sh/zig does not publish FreeBSD binaries, install zig via
+    // `pkg install zig` and pass --zig=<path> to override.
+    osAbi = "freebsd-none";
   } else {
     // linux: always musl for the compiler binary (static).
     osAbi = "linux-musl";

@@ -351,7 +351,7 @@ export const bunOnlyFlags: Flag[] = [
   },
   {
     flag: "-std=c++23",
-    when: c => c.darwin,
+    when: c => c.darwin || c.freebsd,
     lang: "cxx",
     desc: "C++23 standard",
   },
@@ -738,6 +738,32 @@ export const linkerFlags: Flag[] = [
     desc: "Safe identical-code-folding + linker map (release only)",
   },
 
+  // ─── FreeBSD ───
+  {
+    flag: ["-fno-pic", "-Wl,-no-pie"],
+    when: c => c.freebsd,
+    desc: "No PIE on FreeBSD (simpler codegen)",
+  },
+  {
+    flag: [
+      "-Wl,--as-needed",
+      "-Wl,-z,stack-size=12800000",
+      "-Wl,-O2",
+    ],
+    when: c => c.freebsd,
+    desc: "FreeBSD linker tuning: large stack",
+  },
+  {
+    flag: c => `--ld-path=${c.ld}`,
+    when: c => c.freebsd,
+    desc: "Use lld instead of system ld on FreeBSD",
+  },
+  {
+    flag: ["-lutil", "-lexecinfo"],
+    when: c => c.freebsd,
+    desc: "FreeBSD system libraries (openpty in libutil, backtrace in libexecinfo)",
+  },
+
   // ─── Symbols / exports ───
   // These reference files on disk — linkDepends() lists the same paths
   // so ninja relinks when they change (cmake's LINK_DEPENDS equivalent).
@@ -761,6 +787,14 @@ export const linkerFlags: Flag[] = [
     when: c => c.linux,
     desc: "Dynamic symbol list + version script",
   },
+  {
+    flag: c => [
+      "-rdynamic",
+      `-Wl,--dynamic-list=${c.cwd}/src/symbols.dyn`,
+    ],
+    when: c => c.freebsd,
+    desc: "Dynamic symbol list for FreeBSD (ELF, no version script needed)",
+  },
 ];
 
 /**
@@ -771,6 +805,7 @@ export const linkerFlags: Flag[] = [
 export function linkDepends(cfg: Config): string[] {
   if (cfg.windows) return [join(cfg.cwd, "src/symbols.def")];
   if (cfg.darwin) return [join(cfg.cwd, "src/symbols.txt")];
+  if (cfg.freebsd) return [join(cfg.cwd, "src/symbols.dyn")];
   return [join(cfg.cwd, "src/symbols.dyn"), join(cfg.cwd, "src/linker.lds")];
 }
 

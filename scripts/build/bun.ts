@@ -78,6 +78,17 @@ function systemLibs(cfg: Config): string[] {
     libs.push("-licucore", "-lresolv");
   }
 
+  if (cfg.freebsd) {
+    // FreeBSD system libraries
+    // kvm: kernel virtual memory interface (sysctl)
+    // execinfo: backtrace support (libexecinfo)
+    // util: openpty / login_tty
+    libs.push("-lc", "-lpthread", "-lkvm", "-lexecinfo", "-lutil");
+    if (cfg.webkit === "local") {
+      libs.push("-licudata", "-licui18n", "-licuuc");
+    }
+  }
+
   if (cfg.windows) {
     // Explicit .lib: these go after /link so no auto-suffixing by the
     // clang-cl driver. lld-link auto-appends .lib but link.exe doesn't;

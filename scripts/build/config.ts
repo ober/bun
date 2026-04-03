@@ -17,7 +17,7 @@ import { clangTargetArch } from "./tools.ts";
 import { cyan, dim, green } from "./tty.ts";
 import { ZIG_COMMIT } from "./zig.ts";
 
-export type OS = "linux" | "darwin" | "windows";
+export type OS = "linux" | "darwin" | "windows" | "freebsd";
 export type Arch = "x64" | "aarch64";
 export type Abi = "gnu" | "musl";
 export type BuildType = "Debug" | "Release" | "RelWithDebInfo" | "MinSizeRel";
@@ -69,7 +69,8 @@ export interface Config {
   linux: boolean;
   darwin: boolean;
   windows: boolean;
-  /** linux || darwin */
+  freebsd: boolean;
+  /** linux || darwin || freebsd */
   unix: boolean;
   x64: boolean;
   arm64: boolean;
@@ -293,11 +294,13 @@ export function detectHost(): Host {
         ? "darwin"
         : plat === "win32"
           ? "windows"
-          : (() => {
-              throw new BuildError(`Unsupported host platform: ${plat}`, {
-                hint: "Bun builds on linux, darwin, or windows",
-              });
-            })();
+          : plat === "freebsd"
+            ? "freebsd"
+            : (() => {
+                throw new BuildError(`Unsupported host platform: ${plat}`, {
+                  hint: "Bun builds on linux, darwin, windows, or freebsd",
+                });
+              })();
 
   const a = hostArch();
   const arch: Arch =
@@ -337,11 +340,13 @@ export function resolveConfig(partial: PartialConfig, toolchain: Toolchain): Con
   const compilerArch = os === "windows" ? clangTargetArch(toolchain.cc) : undefined;
   const arch = partial.arch ?? compilerArch ?? host.arch;
   const abi: Abi | undefined = os === "linux" ? (partial.abi ?? detectLinuxAbi()) : undefined;
+  // FreeBSD has no glibc/musl distinction — abi stays undefined
 
   const linux = os === "linux";
   const darwin = os === "darwin";
   const windows = os === "windows";
-  const unix = linux || darwin;
+  const freebsd = os === "freebsd";
+  const unix = linux || darwin || freebsd;
   const x64 = arch === "x64";
   const arm64 = arch === "aarch64";
 
@@ -435,6 +440,7 @@ export function resolveConfig(partial: PartialConfig, toolchain: Toolchain): Con
   assert(!valgrind || linux, "valgrind=true requires os=linux");
   assert(!(asan && valgrind), "Cannot enable both asan and valgrind simultaneously");
   assert(os !== "linux" || abi !== undefined, "Linux builds require an abi (gnu or musl)");
+  assert(os !== "freebsd" || abi === undefined, "FreeBSD builds do not use an abi (gnu/musl)");
 
   // ─── Versioning ───
   const pkgJsonPath = resolve(cwd, "package.json");
@@ -467,6 +473,7 @@ export function resolveConfig(partial: PartialConfig, toolchain: Toolchain): Con
     linux,
     darwin,
     windows,
+    freebsd,
     unix,
     x64,
     arm64,

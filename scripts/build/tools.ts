@@ -312,6 +312,12 @@ function llvmSearchPaths(os: OS, arch: Arch): string[] {
     paths.push(`/usr/lib/llvm${LLVM_MAJOR}/bin`);
   }
 
+  if (os === "freebsd") {
+    // FreeBSD ports install LLVM to /usr/local/bin with version suffix
+    paths.push("/usr/local/bin");
+    paths.push(`/usr/local/llvm${LLVM_MAJOR}/bin`);
+  }
+
   return paths;
 }
 
@@ -333,6 +339,7 @@ function llvmInstallHint(os: OS): string {
   if (os === "linux")
     return `Install with: apt install clang-${LLVM_MAJOR} lld-${LLVM_MAJOR}  (or equivalent for your distro)`;
   if (os === "windows") return `Install LLVM ${LLVM_VERSION} from https://github.com/llvm/llvm-project/releases`;
+  if (os === "freebsd") return `Install with: pkg install llvm${LLVM_MAJOR}`;
   return "";
 }
 
@@ -414,12 +421,12 @@ export function resolveLlvmToolchain(
     })?.path;
   }
 
-  // ld: ld.lld on Linux (passed as --ld-path=), lld-link on Windows.
+  // ld: ld.lld on Linux/FreeBSD (passed as --ld-path=), lld-link on Windows.
   // On Darwin clang drives the system linker directly.
   let ld: string;
   if (os === "windows") {
     ld = findLlvmTool("lld-link", paths, os, { checkVersion: false, required: true })?.path ?? "";
-  } else if (os === "linux") {
+  } else if (os === "linux" || os === "freebsd") {
     ld = findLlvmTool("ld.lld", paths, os, { checkVersion: true, required: true })?.path ?? "";
   } else {
     ld = ""; // darwin: unused
@@ -430,6 +437,7 @@ export function resolveLlvmToolchain(
   if (os === "linux") {
     strip = findTool({ names: ["strip"], required: true, hint: "Install binutils for your distro" })?.path ?? "";
   } else {
+    // FreeBSD, darwin: use llvm-strip
     strip = findLlvmTool("llvm-strip", paths, os, { checkVersion: false, required: true })?.path ?? "";
   }
 
