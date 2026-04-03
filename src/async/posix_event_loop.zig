@@ -113,7 +113,7 @@ pub const KeepAlive = struct {
     }
 };
 
-const KQueueGenerationNumber = if (Environment.isMac and Environment.allow_assert) usize else u0;
+const KQueueGenerationNumber = if (Environment.hasKqueue and Environment.allow_assert) usize else u0;
 pub const FilePoll = struct {
     var max_generation_number: KQueueGenerationNumber = 0;
 
@@ -223,12 +223,17 @@ pub const FilePoll = struct {
         return .pipe;
     }
 
-    pub fn onKQueueEvent(poll: *FilePoll, _: *Loop, kqueue_event: *const std.posix.system.kevent64_s) void {
+    pub fn onKQueueEvent(poll: *FilePoll, _: *Loop, kqueue_event: *const KEvent) void {
         poll.updateFlags(Flags.fromKQueueEvent(kqueue_event.*));
         log("onKQueueEvent: {f}", .{poll});
 
-        if (KQueueGenerationNumber != u0)
-            bun.assert(poll.generation_number == kqueue_event.ext[0]);
+        if (KQueueGenerationNumber != u0) {
+            const gen = if (comptime Environment.isFreeBSD)
+                kqueue_event._ext[0]
+            else
+                kqueue_event.ext[0];
+            bun.assert(poll.generation_number == gen);
+        }
 
         poll.onUpdate(kqueue_event.data);
     }
@@ -323,7 +328,7 @@ pub const FilePoll = struct {
         return this.flags.contains(.poll_writable) or this.flags.contains(.poll_readable) or this.flags.contains(.poll_process) or this.flags.contains(.poll_machport);
     }
 
-    const kqueue_or_epoll = if (Environment.isMac) "kevent" else "epoll";
+    const kqueue_or_epoll = if (Environment.hasKqueue) "kevent" else "epoll";
 
     pub fn onUpdate(poll: *FilePoll, size_or_offset: i64) void {
         if (poll.flags.contains(.one_shot) and !poll.flags.contains(.needs_rearm)) {
@@ -507,7 +512,7 @@ pub const FilePoll = struct {
             }
         }
 
-        pub fn fromKQueueEvent(kqueue_event: std.posix.system.kevent64_s) Flags.Set {
+        pub fn fromKQueueEvent(kqueue_event: KEvent) Flags.Set {
             var flags = Flags.Set{};
             if (kqueue_event.filter == std.posix.system.EVFILT.READ) {
                 flags.insert(Flags.readable);
@@ -521,8 +526,10 @@ pub const FilePoll = struct {
                 }
             } else if (kqueue_event.filter == std.posix.system.EVFILT.PROC) {
                 flags.insert(Flags.process);
-            } else if (kqueue_event.filter == std.posix.system.EVFILT.MACHPORT) {
-                flags.insert(Flags.machport);
+            } else if (comptime Environment.isMac) {
+                if (kqueue_event.filter == std.posix.system.EVFILT.MACHPORT) {
+                    flags.insert(Flags.machport);
+                }
             }
             return flags;
         }
@@ -779,7 +786,7 @@ pub const FilePoll = struct {
             return;
         }
 
-        if (comptime Environment.isMac)
+        if (comptime Environment.hasKqueue)
             onKQueueEvent(file_poll, loop, &loop.ready_polls[@as(usize, @intCast(loop.current_ready_poll))])
         else if (comptime Environment.isLinux)
             onEpollEvent(file_poll, loop, &loop.ready_polls[@as(usize, @intCast(loop.current_ready_poll))]);
@@ -796,6 +803,8 @@ pub const FilePoll = struct {
     const timeout = std.mem.zeroes(std.posix.timespec);
     const kevent = std.c.kevent;
     const linux = std.os.linux;
+    /// Platform-specific kqueue event type.
+    const KEvent = if (Environment.isFreeBSD) std.c.Kevent else std.posix.system.kevent64_s;
 
     pub const OneShotFlag = enum { dispatch, one_shot, none };
 
@@ -840,8 +849,8 @@ pub const FilePoll = struct {
                 this.deactivate(loop);
                 return errno;
             }
-        } else if (comptime Environment.isMac) {
-            var changelist = std.mem.zeroes([2]std.posix.system.kevent64_s);
+        } else if (comptime Environment.hasKqueue) {
+            var changelist = std.mem.zeroes([2]KEvent);
             const one_shot_flag: u16 = if (!this.flags.contains(.one_shot))
                 0
             else if (one_shot == .dispatch)
@@ -849,45 +858,75 @@ pub const FilePoll = struct {
             else
                 std.c.EV.ONESHOT;
 
-            changelist[0] = switch (flag) {
-                .readable => .{
-                    .ident = @intCast(fd.cast()),
-                    .filter = std.posix.system.EVFILT.READ,
-                    .data = 0,
-                    .fflags = 0,
-                    .udata = @intFromPtr(Pollable.init(this).ptr()),
-                    .flags = std.c.EV.ADD | one_shot_flag,
-                    .ext = .{ this.generation_number, 0 },
-                },
-                .writable => .{
-                    .ident = @intCast(fd.cast()),
-                    .filter = std.posix.system.EVFILT.WRITE,
-                    .data = 0,
-                    .fflags = 0,
-                    .udata = @intFromPtr(Pollable.init(this).ptr()),
-                    .flags = std.c.EV.ADD | one_shot_flag,
-                    .ext = .{ this.generation_number, 0 },
-                },
-                .process => .{
-                    .ident = @intCast(fd.cast()),
-                    .filter = std.posix.system.EVFILT.PROC,
-                    .data = 0,
-                    .fflags = std.c.NOTE.EXIT,
-                    .udata = @intFromPtr(Pollable.init(this).ptr()),
-                    .flags = std.c.EV.ADD | one_shot_flag,
-                    .ext = .{ this.generation_number, 0 },
-                },
-                .machport => .{
-                    .ident = @intCast(fd.cast()),
-                    .filter = std.posix.system.EVFILT.MACHPORT,
-                    .data = 0,
-                    .fflags = 0,
-                    .udata = @intFromPtr(Pollable.init(this).ptr()),
-                    .flags = std.c.EV.ADD | one_shot_flag,
-                    .ext = .{ this.generation_number, 0 },
-                },
-                else => unreachable,
-            };
+            if (comptime Environment.isFreeBSD) {
+                changelist[0] = switch (flag) {
+                    .readable => .{
+                        .ident = @intCast(fd.cast()),
+                        .filter = std.posix.system.EVFILT.READ,
+                        .data = 0,
+                        .fflags = 0,
+                        .udata = @intFromPtr(Pollable.init(this).ptr()),
+                        .flags = std.c.EV.ADD | one_shot_flag,
+                    },
+                    .writable => .{
+                        .ident = @intCast(fd.cast()),
+                        .filter = std.posix.system.EVFILT.WRITE,
+                        .data = 0,
+                        .fflags = 0,
+                        .udata = @intFromPtr(Pollable.init(this).ptr()),
+                        .flags = std.c.EV.ADD | one_shot_flag,
+                    },
+                    .process => .{
+                        .ident = @intCast(fd.cast()),
+                        .filter = std.posix.system.EVFILT.PROC,
+                        .data = 0,
+                        .fflags = std.c.NOTE.EXIT,
+                        .udata = @intFromPtr(Pollable.init(this).ptr()),
+                        .flags = std.c.EV.ADD | one_shot_flag,
+                    },
+                    else => unreachable,
+                };
+            } else {
+                changelist[0] = switch (flag) {
+                    .readable => .{
+                        .ident = @intCast(fd.cast()),
+                        .filter = std.posix.system.EVFILT.READ,
+                        .data = 0,
+                        .fflags = 0,
+                        .udata = @intFromPtr(Pollable.init(this).ptr()),
+                        .flags = std.c.EV.ADD | one_shot_flag,
+                        .ext = .{ this.generation_number, 0 },
+                    },
+                    .writable => .{
+                        .ident = @intCast(fd.cast()),
+                        .filter = std.posix.system.EVFILT.WRITE,
+                        .data = 0,
+                        .fflags = 0,
+                        .udata = @intFromPtr(Pollable.init(this).ptr()),
+                        .flags = std.c.EV.ADD | one_shot_flag,
+                        .ext = .{ this.generation_number, 0 },
+                    },
+                    .process => .{
+                        .ident = @intCast(fd.cast()),
+                        .filter = std.posix.system.EVFILT.PROC,
+                        .data = 0,
+                        .fflags = std.c.NOTE.EXIT,
+                        .udata = @intFromPtr(Pollable.init(this).ptr()),
+                        .flags = std.c.EV.ADD | one_shot_flag,
+                        .ext = .{ this.generation_number, 0 },
+                    },
+                    .machport => .{
+                        .ident = @intCast(fd.cast()),
+                        .filter = std.posix.system.EVFILT.MACHPORT,
+                        .data = 0,
+                        .fflags = 0,
+                        .udata = @intFromPtr(Pollable.init(this).ptr()),
+                        .flags = std.c.EV.ADD | one_shot_flag,
+                        .ext = .{ this.generation_number, 0 },
+                    },
+                    else => unreachable,
+                };
+            }
 
             // output events only include change errors
             const KEVENT_FLAG_ERROR_EVENTS = 0x000002;
@@ -897,18 +936,28 @@ pub const FilePoll = struct {
             // limit expires, then kevent() returns 0.
             const rc = rc: {
                 while (true) {
-                    const rc = std.posix.system.kevent64(
-                        watcher_fd,
-                        &changelist,
-                        1,
-                        // The same array may be used for the changelist and eventlist.
-                        &changelist,
-                        // we set 0 here so that if we get an error on
-                        // registration, it becomes errno
-                        0,
-                        KEVENT_FLAG_ERROR_EVENTS,
-                        &timeout,
-                    );
+                    const rc = if (comptime Environment.isFreeBSD)
+                        std.c.kevent(
+                            watcher_fd,
+                            &changelist,
+                            1,
+                            &changelist,
+                            0,
+                            null,
+                        )
+                    else
+                        std.posix.system.kevent64(
+                            watcher_fd,
+                            &changelist,
+                            1,
+                            // The same array may be used for the changelist and eventlist.
+                            &changelist,
+                            // we set 0 here so that if we get an error on
+                            // registration, it becomes errno
+                            0,
+                            KEVENT_FLAG_ERROR_EVENTS,
+                            &timeout,
+                        );
 
                     if (bun.sys.getErrno(rc) == .INTR) continue;
                     break :rc rc;
@@ -1008,48 +1057,78 @@ pub const FilePoll = struct {
             if (bun.sys.Maybe(void).errnoSys(ctl, .epoll_ctl)) |errno| {
                 return errno;
             }
-        } else if (comptime Environment.isMac) {
-            var changelist = std.mem.zeroes([2]std.posix.system.kevent64_s);
+        } else if (comptime Environment.hasKqueue) {
+            var changelist = std.mem.zeroes([2]KEvent);
 
-            changelist[0] = switch (flag) {
-                .readable => .{
-                    .ident = @intCast(fd.cast()),
-                    .filter = std.posix.system.EVFILT.READ,
-                    .data = 0,
-                    .fflags = 0,
-                    .udata = @intFromPtr(Pollable.init(this).ptr()),
-                    .flags = std.c.EV.DELETE,
-                    .ext = .{ 0, 0 },
-                },
-                .machport => .{
-                    .ident = @intCast(fd.cast()),
-                    .filter = std.posix.system.EVFILT.MACHPORT,
-                    .data = 0,
-                    .fflags = 0,
-                    .udata = @intFromPtr(Pollable.init(this).ptr()),
-                    .flags = std.c.EV.DELETE,
-                    .ext = .{ 0, 0 },
-                },
-                .writable => .{
-                    .ident = @intCast(fd.cast()),
-                    .filter = std.posix.system.EVFILT.WRITE,
-                    .data = 0,
-                    .fflags = 0,
-                    .udata = @intFromPtr(Pollable.init(this).ptr()),
-                    .flags = std.c.EV.DELETE,
-                    .ext = .{ 0, 0 },
-                },
-                .process => .{
-                    .ident = @intCast(fd.cast()),
-                    .filter = std.posix.system.EVFILT.PROC,
-                    .data = 0,
-                    .fflags = std.c.NOTE.EXIT,
-                    .udata = @intFromPtr(Pollable.init(this).ptr()),
-                    .flags = std.c.EV.DELETE,
-                    .ext = .{ 0, 0 },
-                },
-                else => unreachable,
-            };
+            if (comptime Environment.isFreeBSD) {
+                changelist[0] = switch (flag) {
+                    .readable => .{
+                        .ident = @intCast(fd.cast()),
+                        .filter = std.posix.system.EVFILT.READ,
+                        .data = 0,
+                        .fflags = 0,
+                        .udata = @intFromPtr(Pollable.init(this).ptr()),
+                        .flags = std.c.EV.DELETE,
+                    },
+                    .writable => .{
+                        .ident = @intCast(fd.cast()),
+                        .filter = std.posix.system.EVFILT.WRITE,
+                        .data = 0,
+                        .fflags = 0,
+                        .udata = @intFromPtr(Pollable.init(this).ptr()),
+                        .flags = std.c.EV.DELETE,
+                    },
+                    .process => .{
+                        .ident = @intCast(fd.cast()),
+                        .filter = std.posix.system.EVFILT.PROC,
+                        .data = 0,
+                        .fflags = std.c.NOTE.EXIT,
+                        .udata = @intFromPtr(Pollable.init(this).ptr()),
+                        .flags = std.c.EV.DELETE,
+                    },
+                    else => unreachable,
+                };
+            } else {
+                changelist[0] = switch (flag) {
+                    .readable => .{
+                        .ident = @intCast(fd.cast()),
+                        .filter = std.posix.system.EVFILT.READ,
+                        .data = 0,
+                        .fflags = 0,
+                        .udata = @intFromPtr(Pollable.init(this).ptr()),
+                        .flags = std.c.EV.DELETE,
+                        .ext = .{ 0, 0 },
+                    },
+                    .machport => .{
+                        .ident = @intCast(fd.cast()),
+                        .filter = std.posix.system.EVFILT.MACHPORT,
+                        .data = 0,
+                        .fflags = 0,
+                        .udata = @intFromPtr(Pollable.init(this).ptr()),
+                        .flags = std.c.EV.DELETE,
+                        .ext = .{ 0, 0 },
+                    },
+                    .writable => .{
+                        .ident = @intCast(fd.cast()),
+                        .filter = std.posix.system.EVFILT.WRITE,
+                        .data = 0,
+                        .fflags = 0,
+                        .udata = @intFromPtr(Pollable.init(this).ptr()),
+                        .flags = std.c.EV.DELETE,
+                        .ext = .{ 0, 0 },
+                    },
+                    .process => .{
+                        .ident = @intCast(fd.cast()),
+                        .filter = std.posix.system.EVFILT.PROC,
+                        .data = 0,
+                        .fflags = std.c.NOTE.EXIT,
+                        .udata = @intFromPtr(Pollable.init(this).ptr()),
+                        .flags = std.c.EV.DELETE,
+                        .ext = .{ 0, 0 },
+                    },
+                    else => unreachable,
+                };
+            }
 
             // output events only include change errors
             const KEVENT_FLAG_ERROR_EVENTS = 0x000002;
@@ -1057,16 +1136,26 @@ pub const FilePoll = struct {
             // The kevent() system call returns the number of events placed in
             // the eventlist, up to the value given by nevents.  If the time
             // limit expires, then kevent() returns 0.
-            const rc = std.posix.system.kevent64(
-                watcher_fd,
-                &changelist,
-                1,
-                // The same array may be used for the changelist and eventlist.
-                &changelist,
-                1,
-                KEVENT_FLAG_ERROR_EVENTS,
-                &timeout,
-            );
+            const rc = if (comptime Environment.isFreeBSD)
+                std.c.kevent(
+                    watcher_fd,
+                    &changelist,
+                    1,
+                    &changelist,
+                    1,
+                    null,
+                )
+            else
+                std.posix.system.kevent64(
+                    watcher_fd,
+                    &changelist,
+                    1,
+                    // The same array may be used for the changelist and eventlist.
+                    &changelist,
+                    1,
+                    KEVENT_FLAG_ERROR_EVENTS,
+                    &timeout,
+                );
             // If an error occurs while
             // processing an element of the changelist and there is enough room
             // in the eventlist, then the event will be placed in the eventlist
@@ -1102,6 +1191,7 @@ pub const FilePoll = struct {
 pub const Waker = switch (Environment.os) {
     .mac => KEventWaker,
     .linux => LinuxWaker,
+    .freebsd => FreeBSDWaker,
     .windows, .wasm => @compileError("unreachable"),
 };
 
@@ -1134,6 +1224,40 @@ pub const LinuxWaker = struct {
     }
 };
 
+/// FreeBSD waker: pipe-based since FreeBSD lacks eventfd.
+/// The read end is registered with kqueue; wake() writes a byte to the write end.
+pub const FreeBSDWaker = struct {
+    read_fd: bun.FileDescriptor,
+    write_fd: bun.FileDescriptor,
+
+    pub fn init() !Waker {
+        var fds: [2]std.posix.fd_t = undefined;
+        try std.posix.pipe2(&fds, .{ .CLOEXEC = true, .NONBLOCK = true });
+        return Waker{
+            .read_fd = .fromNative(fds[0]),
+            .write_fd = .fromNative(fds[1]),
+        };
+    }
+
+    pub fn getFd(this: *const Waker) bun.FileDescriptor {
+        return this.read_fd;
+    }
+
+    pub fn initWithFileDescriptor(_: bun.FileDescriptor) Waker {
+        @compileError("FreeBSDWaker does not support initWithFileDescriptor");
+    }
+
+    pub fn wait(this: Waker) void {
+        var buf: [64]u8 = undefined;
+        _ = std.posix.read(this.read_fd.cast(), &buf) catch 0;
+    }
+
+    pub fn wake(this: *const Waker) void {
+        var byte: u8 = 1;
+        _ = std.posix.write(this.write_fd.cast(), @as(*[1]u8, &byte)) catch 0;
+    }
+};
+
 pub const KEventWaker = struct {
     kq: std.posix.fd_t,
     machport: bun.mach_port = undefined,
@@ -1142,7 +1266,7 @@ pub const KEventWaker = struct {
 
     const zeroed = std.mem.zeroes([16]Kevent64);
 
-    const Kevent64 = std.posix.system.kevent64_s;
+    const Kevent64 = if (Environment.isFreeBSD) std.c.Kevent else std.posix.system.kevent64_s;
 
     pub fn wake(this: *Waker) void {
         bun.jsc.markBinding(@src());

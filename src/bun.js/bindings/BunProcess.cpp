@@ -113,6 +113,13 @@ typedef int mode_t;
 #include <fcntl.h>
 #endif
 
+#if defined(__FreeBSD__)
+#include <sys/sysctl.h>
+#include <sys/user.h>
+#include <sys/resource.h>
+#include <fcntl.h>
+#endif
+
 #if !defined(_MSC_VER)
 #include <unistd.h> // setuid, getuid
 #endif
@@ -185,6 +192,8 @@ static JSValue constructPlatform(VM& vm, JSObject* processObject)
     return JSC::jsString(vm, makeAtomString("linux"_s));
 #elif OS(WINDOWS)
     return JSC::jsString(vm, makeAtomString("win32"_s));
+#elif defined(__FreeBSD__)
+    return JSC::jsString(vm, makeAtomString("freebsd"_s));
 #else
 #error "Unknown platform"
 #endif
@@ -3284,6 +3293,15 @@ extern "C" int getRSS(size_t* rss)
 
 err:
     return EINVAL;
+#elif defined(__FreeBSD__)
+    // FreeBSD: use sysctl kern.proc.pid.N (kinfo_proc)
+    struct kinfo_proc info;
+    size_t len = sizeof(info);
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, (int)getpid() };
+    if (sysctl(mib, 4, &info, &len, NULL, 0) != 0)
+        return errno;
+    *rss = (size_t)info.ki_rssize * (size_t)getpagesize();
+    return 0;
 #elif OS(WINDOWS)
     return uv_resident_set_memory(rss);
 #else

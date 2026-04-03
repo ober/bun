@@ -34,6 +34,23 @@ extern "C" uint64_t Bun__Os__getFreeMemory(void)
 }
 #endif
 
+#if defined(__FreeBSD__)
+#include <sys/types.h>
+#include <sys/sysctl.h>
+#include <vm/vm_param.h>
+#include <unistd.h>
+
+// FreeBSD: use sysctl vm.stats.vm.v_free_count * page_size
+extern "C" uint64_t Bun__Os__getFreeMemory(void)
+{
+    unsigned int v_free_count = 0;
+    size_t len = sizeof(v_free_count);
+    if (sysctlbyname("vm.stats.vm.v_free_count", &v_free_count, &len, NULL, 0) != 0)
+        return 0;
+    return (uint64_t)v_free_count * (uint64_t)sysconf(_SC_PAGESIZE);
+}
+#endif
+
 #if OS(WINDOWS)
 extern "C" uint64_t uv_get_available_memory(void);
 

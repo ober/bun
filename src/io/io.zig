@@ -80,7 +80,7 @@ pub const Loop = struct {
 
         if (comptime Environment.isLinux) {
             this.tickEpoll();
-        } else if (comptime Environment.isMac) {
+        } else if (comptime Environment.isMac or Environment.isFreeBSD) {
             this.tickKqueue();
         } else {
             @panic("TODO on this platform");
@@ -187,8 +187,8 @@ pub const Loop = struct {
     }
 
     pub fn tickKqueue(this: *Loop) void {
-        if (comptime !Environment.isMac) {
-            @compileError("Kqueue is MacOS-Only");
+        if (comptime !Environment.isMac and !Environment.isFreeBSD) {
+            @compileError("Kqueue is only supported on macOS and FreeBSD");
         }
 
         this.updateNow();
@@ -255,29 +255,39 @@ pub const Loop = struct {
 
             const change_count = events_list.items.len;
 
-            const rc = posix.system.kevent64(
-                this.pollfd().cast(),
-                events_list.items.ptr,
-                @intCast(change_count),
-                // The same array may be used for the changelist and eventlist.
-                events_list.items.ptr,
-                // we set 0 here so that if we get an error on
-                // registration, it becomes errno
-                @intCast(events_list.capacity),
-                0,
-                null,
-            );
+            const rc = if (comptime Environment.isFreeBSD)
+                std.c.kevent(
+                    this.pollfd().cast(),
+                    events_list.items.ptr,
+                    @intCast(change_count),
+                    events_list.items.ptr,
+                    @intCast(events_list.capacity),
+                    null,
+                )
+            else
+                posix.system.kevent64(
+                    this.pollfd().cast(),
+                    events_list.items.ptr,
+                    @intCast(change_count),
+                    // The same array may be used for the changelist and eventlist.
+                    events_list.items.ptr,
+                    // we set 0 here so that if we get an error on
+                    // registration, it becomes errno
+                    @intCast(events_list.capacity),
+                    0,
+                    null,
+                );
 
             switch (bun.sys.getErrno(rc)) {
                 .INTR => continue,
                 .SUCCESS => {},
-                else => |e| bun.Output.panic("kevent64 failed: {s}", .{@tagName(e)}),
+                else => |e| bun.Output.panic("kevent failed: {s}", .{@tagName(e)}),
             }
 
             this.updateNow();
 
             assert(rc <= events_list.capacity);
-            const current_events: []std.posix.system.kevent64_s = events_list.items.ptr[0..@intCast(rc)];
+            const current_events: []EventType = events_list.items.ptr[0..@intCast(rc)];
 
             for (current_events) |event| {
                 Poll.onUpdateKQueue(event);
@@ -310,7 +320,14 @@ pub const Loop = struct {
     }
 };
 
-const EventType = if (Environment.isLinux) linux.epoll_event else std.posix.system.kevent64_s;
+/// Platform event type. Linux uses epoll_event, macOS uses kevent64_s (extended),
+/// FreeBSD uses the standard kevent (std.c.Kevent).
+const EventType = if (Environment.isLinux)
+    linux.epoll_event
+else if (Environment.isFreeBSD)
+    std.c.Kevent
+else
+    std.posix.system.kevent64_s;
 
 pub const Request = struct {
     next: ?*Request = null,
@@ -440,7 +457,7 @@ pub const Poll = struct {
         pub const Set = std.EnumSet(Flags);
         pub const Struct = std.enums.EnumFieldStruct(Flags, bool, false);
 
-        pub fn fromKQueueEvent(kqueue_event: std.posix.system.kevent64_s) Flags.Set {
+        pub fn fromKQueueEvent(kqueue_event: EventType) Flags.Set {
             var flags = Flags.Set{};
             if (kqueue_event.filter == std.posix.system.EVFILT.READ) {
                 flags.insert(Flags.readable);
@@ -459,9 +476,11 @@ pub const Poll = struct {
             } else if (kqueue_event.filter == std.posix.system.EVFILT.PROC) {
                 log("proc", .{});
                 flags.insert(Flags.process);
-            } else if (kqueue_event.filter == std.posix.system.EVFILT.MACHPORT) {
-                log("machport", .{});
-                flags.insert(Flags.machport);
+            } else if (comptime Environment.isMac) {
+                if (kqueue_event.filter == std.posix.system.EVFILT.MACHPORT) {
+                    log("machport", .{});
+                    flags.insert(Flags.machport);
+                }
             }
             return flags;
         }
@@ -492,7 +511,7 @@ pub const Poll = struct {
             tag: Pollable.Tag,
             poll: *Poll,
             fd: bun.FileDescriptor,
-            kqueue_event: *std.posix.system.kevent64_s,
+            kqueue_event: *EventType,
         ) void {
             log("register({s}, {f})", .{ @tagName(action), fd });
             defer {
@@ -519,45 +538,83 @@ pub const Poll = struct {
 
             const one_shot_flag = std.posix.system.EV.ONESHOT;
 
-            kqueue_event.* = switch (comptime action) {
-                .readable => .{
-                    .ident = @as(u64, @intCast(fd.native())),
-                    .filter = std.posix.system.EVFILT.READ,
-                    .data = 0,
-                    .fflags = 0,
-                    .udata = @intFromPtr(Pollable.init(tag, poll).ptr()),
-                    .flags = std.c.EV.ADD | one_shot_flag,
-                    .ext = .{ generation_number_monotonic, 0 },
-                },
-                .writable => .{
-                    .ident = @as(u64, @intCast(fd.native())),
-                    .filter = std.posix.system.EVFILT.WRITE,
-                    .data = 0,
-                    .fflags = 0,
-                    .udata = @intFromPtr(Pollable.init(tag, poll).ptr()),
-                    .flags = std.c.EV.ADD | one_shot_flag,
-                    .ext = .{ generation_number_monotonic, 0 },
-                },
-                .cancel => if (poll.flags.contains(.poll_readable)) .{
-                    .ident = @as(u64, @intCast(fd.native())),
-                    .filter = std.posix.system.EVFILT.READ,
-                    .data = 0,
-                    .fflags = 0,
-                    .udata = @intFromPtr(Pollable.init(tag, poll).ptr()),
-                    .flags = std.c.EV.DELETE,
-                    .ext = .{ poll.generation_number, 0 },
-                } else if (poll.flags.contains(.poll_writable)) .{
-                    .ident = @as(u64, @intCast(fd.native())),
-                    .filter = std.posix.system.EVFILT.WRITE,
-                    .data = 0,
-                    .fflags = 0,
-                    .udata = @intFromPtr(Pollable.init(tag, poll).ptr()),
-                    .flags = std.c.EV.DELETE,
-                    .ext = .{ poll.generation_number, 0 },
-                } else unreachable,
-
-                else => @compileError("invalid action: " ++ @tagName(action)),
-            };
+            if (comptime Environment.isFreeBSD) {
+                // FreeBSD uses std.c.Kevent (ident: usize, _ext: [4]u64 with default 0)
+                kqueue_event.* = switch (comptime action) {
+                    .readable => .{
+                        .ident = @intCast(fd.native()),
+                        .filter = std.posix.system.EVFILT.READ,
+                        .data = 0,
+                        .fflags = 0,
+                        .udata = @intFromPtr(Pollable.init(tag, poll).ptr()),
+                        .flags = std.c.EV.ADD | one_shot_flag,
+                    },
+                    .writable => .{
+                        .ident = @intCast(fd.native()),
+                        .filter = std.posix.system.EVFILT.WRITE,
+                        .data = 0,
+                        .fflags = 0,
+                        .udata = @intFromPtr(Pollable.init(tag, poll).ptr()),
+                        .flags = std.c.EV.ADD | one_shot_flag,
+                    },
+                    .cancel => if (poll.flags.contains(.poll_readable)) .{
+                        .ident = @intCast(fd.native()),
+                        .filter = std.posix.system.EVFILT.READ,
+                        .data = 0,
+                        .fflags = 0,
+                        .udata = @intFromPtr(Pollable.init(tag, poll).ptr()),
+                        .flags = std.c.EV.DELETE,
+                    } else if (poll.flags.contains(.poll_writable)) .{
+                        .ident = @intCast(fd.native()),
+                        .filter = std.posix.system.EVFILT.WRITE,
+                        .data = 0,
+                        .fflags = 0,
+                        .udata = @intFromPtr(Pollable.init(tag, poll).ptr()),
+                        .flags = std.c.EV.DELETE,
+                    } else unreachable,
+                    else => @compileError("invalid action: " ++ @tagName(action)),
+                };
+            } else {
+                // macOS uses kevent64_s (has .ext field for generation numbers)
+                kqueue_event.* = switch (comptime action) {
+                    .readable => .{
+                        .ident = @as(u64, @intCast(fd.native())),
+                        .filter = std.posix.system.EVFILT.READ,
+                        .data = 0,
+                        .fflags = 0,
+                        .udata = @intFromPtr(Pollable.init(tag, poll).ptr()),
+                        .flags = std.c.EV.ADD | one_shot_flag,
+                        .ext = .{ generation_number_monotonic, 0 },
+                    },
+                    .writable => .{
+                        .ident = @as(u64, @intCast(fd.native())),
+                        .filter = std.posix.system.EVFILT.WRITE,
+                        .data = 0,
+                        .fflags = 0,
+                        .udata = @intFromPtr(Pollable.init(tag, poll).ptr()),
+                        .flags = std.c.EV.ADD | one_shot_flag,
+                        .ext = .{ generation_number_monotonic, 0 },
+                    },
+                    .cancel => if (poll.flags.contains(.poll_readable)) .{
+                        .ident = @as(u64, @intCast(fd.native())),
+                        .filter = std.posix.system.EVFILT.READ,
+                        .data = 0,
+                        .fflags = 0,
+                        .udata = @intFromPtr(Pollable.init(tag, poll).ptr()),
+                        .flags = std.c.EV.DELETE,
+                        .ext = .{ poll.generation_number, 0 },
+                    } else if (poll.flags.contains(.poll_writable)) .{
+                        .ident = @as(u64, @intCast(fd.native())),
+                        .filter = std.posix.system.EVFILT.WRITE,
+                        .data = 0,
+                        .fflags = 0,
+                        .udata = @intFromPtr(Pollable.init(tag, poll).ptr()),
+                        .flags = std.c.EV.DELETE,
+                        .ext = .{ poll.generation_number, 0 },
+                    } else unreachable,
+                    else => @compileError("invalid action: " ++ @tagName(action)),
+                };
+            }
         }
     };
 
@@ -572,10 +629,12 @@ pub const Poll = struct {
     }
 
     pub fn onUpdateKQueue(
-        event: std.posix.system.kevent64_s,
+        event: EventType,
     ) void {
-        if (event.filter == std.c.EVFILT.MACHPORT)
-            return;
+        if (comptime Environment.isMac) {
+            if (event.filter == std.c.EVFILT.MACHPORT)
+                return;
+        }
 
         const pollable = Pollable.from(event.udata);
         const tag = pollable.tag();

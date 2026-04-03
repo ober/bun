@@ -35,6 +35,60 @@ pub const IteratorW = NewIterator(true);
 
 pub fn NewIterator(comptime use_windows_ospath: bool) type {
     return switch (bun.Environment.os) {
+        .freebsd => struct {
+            dir: FD,
+            buf: [8192]u8 align(@alignOf(std.posix.system.dirent)),
+            index: usize,
+            end_index: usize,
+            seek: i64,
+
+            const Self = @This();
+
+            pub const Error = IteratorError;
+
+            /// Memory such as file names referenced in this returned entry becomes invalid
+            /// with subsequent calls to `next`, as well as when this `Dir` is deinitialized.
+            pub fn next(self: *Self) Result {
+                start_over: while (true) {
+                    if (self.index >= self.end_index) {
+                        const rc = std.c.getdirentries(self.dir.cast(), &self.buf, self.buf.len, &self.seek);
+                        if (rc == 0) return .{ .result = null };
+                        if (rc < 0) {
+                            return Result.errno(@intCast(-rc), .getdirentries);
+                        }
+                        self.index = 0;
+                        self.end_index = @intCast(rc);
+                    }
+                    const entry = @as(*align(1) std.posix.system.dirent, @ptrCast(&self.buf[self.index]));
+                    const next_index = self.index + entry.reclen;
+                    self.index = next_index;
+
+                    const name = mem.sliceTo(@as([*:0]u8, @ptrCast(&entry.name)), 0);
+
+                    // skip . and .. entries
+                    if (strings.eqlComptime(name, ".") or strings.eqlComptime(name, "..")) {
+                        continue :start_over;
+                    }
+
+                    const entry_kind: Entry.Kind = switch (entry.type) {
+                        std.posix.DT.BLK => Entry.Kind.block_device,
+                        std.posix.DT.CHR => Entry.Kind.character_device,
+                        std.posix.DT.DIR => Entry.Kind.directory,
+                        std.posix.DT.FIFO => Entry.Kind.named_pipe,
+                        std.posix.DT.LNK => Entry.Kind.sym_link,
+                        std.posix.DT.REG => Entry.Kind.file,
+                        std.posix.DT.SOCK => Entry.Kind.unix_domain_socket,
+                        else => Entry.Kind.unknown,
+                    };
+                    return .{
+                        .result = IteratorResult{
+                            .name = PathString.init(name),
+                            .kind = entry_kind,
+                        },
+                    };
+                }
+            }
+        },
         .mac => struct {
             dir: FD,
             seek: i64,
@@ -433,8 +487,7 @@ pub fn NewWrappedIterator(comptime path_type: PathType) type {
         pub fn init(dir: FD) Self {
             return Self{
                 .iter = switch (bun.Environment.os) {
-                    .mac,
-                    => IteratorType{
+                    .mac, .freebsd => IteratorType{
                         .dir = dir,
                         .seek = 0,
                         .index = 0,
