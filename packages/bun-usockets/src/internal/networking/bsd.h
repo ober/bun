@@ -41,6 +41,8 @@
 #endif
 /* For socklen_t */
 #include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <netdb.h>
 #define SETSOCKOPT_PTR_TYPE int *
 #define LIBUS_SOCKET_ERROR -1

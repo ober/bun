@@ -432,11 +432,16 @@ export const bunOnlyFlags: Flag[] = [
       "-Werror=sometimes-uninitialized",
       "-Wno-c++23-lambda-attributes",
       "-Wno-nullability-completeness",
-      "-Wno-character-conversion",
       "-Werror",
     ],
     when: c => c.unix,
     desc: "Treat most warnings as errors; suppress known-noisy ones",
+  },
+  {
+    // -Wno-character-conversion is Apple Clang-specific; not available in upstream LLVM
+    flag: "-Wno-character-conversion",
+    when: c => c.darwin,
+    desc: "Suppress character-conversion warnings (Apple Clang only)",
   },
   {
     // Debug adds -Werror=unused; release omits it (vars used only in ASSERT)

@@ -1,4 +1,5 @@
 import { join, resolve } from "path";
+import { spawnSync as _nodeSpawnSync } from "child_process";
 
 const classes = ["ArrayBufferSink", "FileSink", "HTTPResponseSink", "HTTPSResponseSink", "NetworkSink"];
 
@@ -1053,9 +1054,10 @@ await Bun.write(resolve(outDir + "/JSSink.h"), header());
 await Bun.write(resolve(outDir + "/JSSink.cpp"), await implementation());
 await Bun.write(resolve(outDir + "/JSSink.lut.txt"), lutInput());
 
-Bun.spawnSync(
+// Use child_process.spawnSync for FreeBSD compat
+_nodeSpawnSync(
+  process.execPath,
   [
-    process.execPath,
     "run",
     join(import.meta.dir, "create-hash-table.ts"),
     resolve(outDir + "/JSSink.lut.txt"),

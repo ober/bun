@@ -12,6 +12,7 @@ import fs from "fs";
 import { mkdir, writeFile } from "fs/promises";
 import { builtinModules } from "node:module";
 import path from "path";
+import { spawnSync as _nodeSpawnSync } from "child_process";
 import jsclasses from "./../bun.js/bindings/js_classes";
 import { sliceSourceCode } from "./builtin-parser";
 import { createAssertClientJS, createLogClientJS } from "./client-js";
@@ -221,14 +222,15 @@ const config_cli = [
   path.join(TMP_DIR, "modules_out"),
 ];
 verbose("running: ", config_cli);
-const out = Bun.spawnSync({
-  cmd: config_cli,
+// Use child_process.spawnSync for portability (Bun.spawnSync can fail under Linux compat on FreeBSD)
+const _spawnOut = _nodeSpawnSync(config_cli[0], config_cli.slice(1), {
   cwd: process.cwd(),
   env: process.env,
   stdio: ["pipe", "pipe", "pipe"],
 });
+const out = { exitCode: _spawnOut.status ?? 1, stderr: _spawnOut.stderr };
 if (out.exitCode !== 0) {
-  console.error(out.stderr.toString());
+  console.error(out.stderr?.toString());
   process.exit(out.exitCode);
 }
 

@@ -45,7 +45,13 @@ void us_loop_run_bun_tick(struct us_loop_t *loop, const struct timespec* timeout
 #define SET_READY_POLL(loop, index, poll) loop->ready_polls[index].data.ptr = (void*)poll
 #else
 #define GET_READY_POLL(loop, index) (struct us_poll_t *) loop->ready_polls[index].udata
+#ifdef __APPLE__
+/* macOS kevent64_s: udata is uint64_t */
 #define SET_READY_POLL(loop, index, poll) loop->ready_polls[index].udata = (uint64_t)poll
+#else
+/* FreeBSD/standard kevent: udata is void* */
+#define SET_READY_POLL(loop, index, poll) loop->ready_polls[index].udata = (void*)(uintptr_t)poll
+#endif
 #endif
 
 /* Loop */
@@ -697,6 +703,51 @@ void us_internal_async_wakeup(struct us_internal_async *a) {
         break;
     }
 }
+#elif defined(__FreeBSD__)
+/* FreeBSD async implementation using EVFILT_USER */
+
+struct us_internal_async *us_internal_create_async(struct us_loop_t *loop, int fallthrough, unsigned int ext_size) {
+    struct us_internal_callback_t *cb = us_calloc(1, sizeof(struct us_internal_callback_t) + ext_size);
+    cb->loop = loop;
+    cb->cb_expects_the_loop = 1;
+    cb->leave_poll_ready = 0;
+
+    cb->p.state.poll_type = POLL_TYPE_POLLING_IN;
+    us_internal_poll_set_type((struct us_poll_t *) cb, POLL_TYPE_CALLBACK);
+
+    if (!fallthrough) {
+        loop->num_polls++;
+    }
+
+    return (struct us_internal_async *) cb;
+}
+
+void us_internal_async_close(struct us_internal_async *a) {
+    struct us_internal_callback_t *internal_cb = (struct us_internal_callback_t *) a;
+    struct kevent event;
+    EV_SET(&event, (uintptr_t)internal_cb, EVFILT_USER, EV_DELETE, 0, 0, (void*)internal_cb);
+    kevent(internal_cb->loop->fd, &event, 1, NULL, 0, NULL);
+    us_poll_free((struct us_poll_t *) a, internal_cb->loop);
+}
+
+void us_internal_async_set(struct us_internal_async *a, void (*cb)(struct us_internal_async *)) {
+    struct us_internal_callback_t *internal_cb = (struct us_internal_callback_t *) a;
+    internal_cb->cb = (void (*)(struct us_internal_callback_t *)) cb;
+
+    /* Register a persistent EVFILT_USER event for wakeup */
+    struct kevent event;
+    EV_SET(&event, (uintptr_t)internal_cb, EVFILT_USER, EV_ADD | EV_CLEAR, 0, 0, (void*)internal_cb);
+    kevent(internal_cb->loop->fd, &event, 1, NULL, 0, NULL);
+}
+
+void us_internal_async_wakeup(struct us_internal_async *a) {
+    struct us_internal_callback_t *internal_cb = (struct us_internal_callback_t *) a;
+    struct kevent event;
+    /* NOTE_TRIGGER fires the event immediately */
+    EV_SET(&event, (uintptr_t)internal_cb, EVFILT_USER, EV_ENABLE, NOTE_TRIGGER, 0, (void*)internal_cb);
+    kevent(internal_cb->loop->fd, &event, 1, NULL, 0, NULL);
+}
+
 #else
 
 #define MACHPORT_BUF_LEN 1024

@@ -1,6 +1,7 @@
 import assert from "node:assert";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
+import { spawnSync as _nodeSpawnSync } from "child_process";
 import { argParse, writeIfNotChanged } from "./helpers";
 
 // arg parsing
@@ -31,11 +32,14 @@ function convertZigEnum(zig: string, names: string[]) {
 }
 
 function css(file: string, is_development: boolean): string {
-  const { success, stdout, stderr } = Bun.spawnSync({
-    cmd: [process.execPath, "build", file, "--minify"],
-    cwd: import.meta.dir,
+  // Use child_process.spawnSync for FreeBSD compat
+  const _r = _nodeSpawnSync(process.execPath, ["build", file, "--minify"], {
+    cwd: import.meta.dirname,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  const success = _r.status === 0;
+  const stdout = _r.stdout;
+  const stderr = _r.stderr;
   if (!success) throw new Error(stderr.toString("utf-8"));
   return stdout.toString("utf-8");
 }

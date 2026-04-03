@@ -31,8 +31,10 @@ typedef SSIZE_T ssize_t;
 #include <stdalign.h>
 #endif
 
-#if defined(LIBUS_USE_KQUEUE)
+#if defined(LIBUS_USE_KQUEUE) && defined(__APPLE__)
 #include <mach/mach.h>
+#elif defined(LIBUS_USE_KQUEUE) && defined(__FreeBSD__)
+#include "internal/eventing/kqueue_freebsd_compat.h"
 #endif
 
 #if defined(LIBUS_USE_EPOLL) || defined(LIBUS_USE_KQUEUE)
@@ -234,8 +236,8 @@ struct us_udp_socket_t {
     struct us_udp_socket_t *next;
 };
 
-#if defined(LIBUS_USE_KQUEUE)
-/* Internal callback types are polls just like sockets */
+#if defined(LIBUS_USE_KQUEUE) && defined(__APPLE__)
+/* Internal callback types are polls just like sockets (macOS with Mach port timers) */
 struct us_internal_callback_t {
   alignas(LIBUS_EXT_ALIGNMENT) struct us_poll_t p;
   struct us_loop_t *loop;

@@ -250,6 +250,21 @@ int bsd_udp_setup_sendbuf(struct udp_sendbuf *buf, size_t bufsize, void** payloa
 int bsd_udp_packet_buffer_local_ip(struct udp_recvbuf *msgvec, int index, char *ip) {
 #if defined(_WIN32) || defined(__APPLE__)
     return 0; // not supported
+#elif defined(__FreeBSD__)
+    struct msghdr *mh = &((struct mmsghdr *) msgvec)[index].msg_hdr;
+    for (struct cmsghdr *cmsg = CMSG_FIRSTHDR(mh); cmsg != NULL; cmsg = CMSG_NXTHDR(mh, cmsg)) {
+        // FreeBSD uses IP_RECVDSTADDR for IPv4 (returns struct in_addr directly)
+        if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IP_RECVDSTADDR) {
+            memcpy(ip, CMSG_DATA(cmsg), 4);
+            return 4;
+        }
+        if (cmsg->cmsg_level == IPPROTO_IPV6 && cmsg->cmsg_type == IPV6_PKTINFO) {
+            struct in6_pktinfo *pi6 = (struct in6_pktinfo *) CMSG_DATA(cmsg);
+            memcpy(ip, &pi6->ipi6_addr, 16);
+            return 16;
+        }
+    }
+    return 0;
 #else
     struct msghdr *mh = &((struct mmsghdr *) msgvec)[index].msg_hdr;
     for (struct cmsghdr *cmsg = CMSG_FIRSTHDR(mh); cmsg != NULL; cmsg = CMSG_NXTHDR(mh, cmsg)) {
@@ -1280,7 +1295,11 @@ LIBUS_SOCKET_DESCRIPTOR bsd_create_udp_socket(const char *host, int port, int op
     int enabled = 1;
     if (setsockopt(listenFd, IPPROTO_IPV6, IPV6_RECVPKTINFO, &enabled, sizeof(enabled)) == -1) {
         if (errno == ENOPROTOOPT || errno == EINVAL) {
+#if defined(__FreeBSD__)
+            setsockopt(listenFd, IPPROTO_IP, IP_RECVDSTADDR, &enabled, sizeof(enabled));
+#elif defined(IP_PKTINFO)
             setsockopt(listenFd, IPPROTO_IP, IP_PKTINFO, &enabled, sizeof(enabled));
+#endif
         }
     }
 
