@@ -514,7 +514,7 @@ pub fn statfs(path: [:0]const u8) Maybe(bun.StatFS) {
         var statfs_ = mem.zeroes(bun.StatFS);
         const rc = if (Environment.isLinux)
             c.statfs(path, &statfs_)
-        else if (Environment.isMac)
+        else if (Environment.isMac or Environment.isFreeBSD)
             c.statfs(path, &statfs_)
         else
             @compileError("Unsupported platform");

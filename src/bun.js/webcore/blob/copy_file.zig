@@ -597,6 +597,24 @@ pub const CopyFile = struct {
             }
 
             this.doClose();
+        } else if (comptime Environment.isFreeBSD) {
+            // FreeBSD: use read/write loop (sendfile on FreeBSD is socket-oriented,
+            // not file-to-file, so we fall back to the portable path)
+            const src_fd = this.source_fd;
+            const dest_fd = this.destination_fd;
+            const total_size: SizeType = if (stat.size != 0) @min(@intCast(stat.size), this.max_length) else this.max_length;
+            var total_written: usize = 0;
+            switch (jsc.Node.fs.NodeFS.copyFileUsingReadWriteLoop("", "", src_fd, dest_fd, total_size, &total_written)) {
+                .err => |err| {
+                    this.system_error = err.toSystemError();
+                },
+                .result => {
+                    if (stat.size != 0 and @as(SizeType, @intCast(stat.size)) > this.max_length) {
+                        _ = std.c.ftruncate(dest_fd.cast(), @as(std.posix.off_t, @intCast(this.max_length)));
+                    }
+                },
+            }
+            this.doClose();
         } else {
             @compileError("TODO: implement copyfile");
         }

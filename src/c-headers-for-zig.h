@@ -12,6 +12,7 @@
 // - WINDOWS
 // - DARWIN
 // - LINUX
+// - FREEBSD
 // - POSIX
 
 // For `POSIX_SPAWN_SETSID` and some other non-POSIX extensions in glibc
@@ -54,6 +55,19 @@
 #include <sys/stat.h>
 #include <sys/statfs.h>
 #include <sys/sysinfo.h>
+#elif FREEBSD
+#include <fcntl.h>
+#include <net/if.h>
+#include <net/if_dl.h>
+#include <spawn.h>
+#include <sys/mount.h>
+#include <sys/param.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/sysctl.h>
+#include <sys/types.h>
+#include <sys/user.h>
+#include <vm/vm_param.h>
 #endif
 
 #if WINDOWS

@@ -674,6 +674,7 @@ fn getTranslateC(b: *Build, initial_target: std.Build.ResolvedTarget, optimize: 
         .{ "POSIX", translate_c.target.result.os.tag != .windows },
         .{ "LINUX", translate_c.target.result.os.tag == .linux },
         .{ "DARWIN", translate_c.target.result.os.tag.isDarwin() },
+        .{ "FREEBSD", translate_c.target.result.os.tag == .freebsd },
     }) |entry| {
         const str, const value = entry;
         translate_c.defineCMacroRaw(b.fmt("{s}={d}", .{ str, @intFromBool(value) }));

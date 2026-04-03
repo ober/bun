@@ -830,7 +830,7 @@ const metadata_version_line = std.fmt.comptimePrint(
 fn handleSegfaultPosix(sig: i32, info: *const std.posix.siginfo_t, _: ?*const anyopaque) callconv(.c) noreturn {
     const addr = switch (bun.Environment.os) {
         .linux => @intFromPtr(info.fields.sigfault.addr),
-        .mac => @intFromPtr(info.addr),
+        .mac, .freebsd => @intFromPtr(info.addr),
         .windows, .wasm => @compileError("unreachable"),
     };
 
@@ -892,7 +892,7 @@ pub fn init() void {
         .windows => {
             windows_segfault_handle = windows.kernel32.AddVectoredExceptionHandler(0, handleSegfaultWindows);
         },
-        .mac, .linux => {
+        .mac, .linux, .freebsd => {
             resetOnPosix();
         },
         .wasm => @compileError("TODO"),
@@ -1500,7 +1500,7 @@ fn report(url: []const u8) void {
             // we don't care what happens with the process
             _ = spawn_result;
         },
-        .mac, .linux => {
+        .mac, .linux, .freebsd => {
             var buf: bun.PathBuffer = undefined;
             var buf2: bun.PathBuffer = undefined;
             const curl = bun.which(
