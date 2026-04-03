@@ -130,10 +130,10 @@ pub const ReadFile = struct {
     pub fn onReady(this: *ReadFile) void {
         bloblog("ReadFile.onReady", .{});
         this.task = .{ .callback = &doReadLoopTask };
-        // On macOS, we use one-shot mode, so:
+        // On kqueue platforms (macOS, FreeBSD), we use one-shot mode, so:
         // - we don't need to unregister
         // - we don't need to delete from kqueue
-        if (comptime Environment.isMac) {
+        if (comptime Environment.hasKqueue) {
             // unless pending IO has been scheduled in-between.
             this.close_after_io = this.io_request.scheduled;
         }
@@ -146,10 +146,10 @@ pub const ReadFile = struct {
         this.errno = bun.errnoToZigErr(err.errno);
         this.system_error = err.toSystemError();
         this.task = .{ .callback = &doReadLoopTask };
-        // On macOS, we use one-shot mode, so:
+        // On kqueue platforms (macOS, FreeBSD), we use one-shot mode, so:
         // - we don't need to unregister
         // - we don't need to delete from kqueue
-        if (comptime Environment.isMac) {
+        if (comptime Environment.hasKqueue) {
             // unless pending IO has been scheduled in-between.
             this.close_after_io = this.io_request.scheduled;
         }

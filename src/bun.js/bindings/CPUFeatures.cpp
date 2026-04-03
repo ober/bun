@@ -75,6 +75,9 @@ static uint8_t x86_cpu_features()
 #elif OS(LINUX)
 #include <sys/auxv.h>
 #include <asm/hwcap.h>
+#elif defined(__FreeBSD__)
+#include <sys/auxv.h>
+#include <machine/elf.h>
 #endif
 
 static uint8_t aarch64_cpu_features()
@@ -111,6 +114,22 @@ static uint8_t aarch64_cpu_features()
         features |= 1 << static_cast<uint8_t>(AArch64CPUFeature::sve);
 #elif OS(LINUX)
     unsigned long hwcaps = getauxval(AT_HWCAP);
+    if (hwcaps & HWCAP_ASIMD)
+        features |= 1 << static_cast<uint8_t>(AArch64CPUFeature::neon);
+    if (hwcaps & HWCAP_FP)
+        features |= 1 << static_cast<uint8_t>(AArch64CPUFeature::fp);
+    if (hwcaps & HWCAP_AES)
+        features |= 1 << static_cast<uint8_t>(AArch64CPUFeature::aes);
+    if (hwcaps & HWCAP_CRC32)
+        features |= 1 << static_cast<uint8_t>(AArch64CPUFeature::crc32);
+    if (hwcaps & HWCAP_ATOMICS)
+        features |= 1 << static_cast<uint8_t>(AArch64CPUFeature::atomics);
+    if (hwcaps & HWCAP_SVE)
+        features |= 1 << static_cast<uint8_t>(AArch64CPUFeature::sve);
+#elif defined(__FreeBSD__)
+    // FreeBSD exposes hardware capabilities via elf_aux_info(AT_HWCAP, ...)
+    unsigned long hwcaps = 0;
+    elf_aux_info(AT_HWCAP, &hwcaps, sizeof(hwcaps));
     if (hwcaps & HWCAP_ASIMD)
         features |= 1 << static_cast<uint8_t>(AArch64CPUFeature::neon);
     if (hwcaps & HWCAP_FP)

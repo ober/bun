@@ -375,8 +375,8 @@ const LibUtil = struct {
 };
 
 fn getOpenPtyFn() ?OpenPtyFn {
-    // On macOS, openpty is in libc, so we can use it directly
-    if (comptime Environment.isMac) {
+    // On macOS and FreeBSD, openpty is in libc/libutil.a which is always linked
+    if (comptime Environment.isMac or comptime Environment.isFreeBSD) {
         const c = struct {
             extern "c" fn openpty(
                 amaster: *c_int,
