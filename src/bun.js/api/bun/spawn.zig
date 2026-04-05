@@ -108,7 +108,10 @@ pub const BunSpawn = struct {
 
         pub fn set(self: *Attr, flags: u16) !void {
             self.flags = flags;
-            self.detached = (flags & bun.c.POSIX_SPAWN_SETSID) != 0;
+            // POSIX_SPAWN_SETSID is not available on FreeBSD; detached is set elsewhere.
+            if (comptime !bun.Environment.isFreeBSD) {
+                self.detached = (flags & bun.c.POSIX_SPAWN_SETSID) != 0;
+            }
         }
 
         pub fn resetSignals(self: *Attr) !void {
@@ -502,11 +505,13 @@ pub const PosixSpawn = struct {
     }
 
     /// Same as waitpid, but also returns resource usage information.
-    pub fn wait4(pid: pid_t, flags: u32, usage: ?*std.posix.rusage) Maybe(WaitPidResult) {
+    /// usage is passed as ?*anyopaque to allow callers to pass a platform-specific
+    /// rusage struct (e.g. freebsd_rusage on FreeBSD where std.posix.rusage is void).
+    pub fn wait4(pid: pid_t, flags: u32, usage: ?*anyopaque) Maybe(WaitPidResult) {
         const PidStatus = c_int;
         var status: PidStatus = 0;
         while (true) {
-            const rc = system.wait4(pid, &status, @as(c_int, @intCast(flags)), usage);
+            const rc = system.wait4(pid, &status, @as(c_int, @intCast(flags)), @as(?*std.posix.rusage, @ptrCast(@alignCast(usage))));
             switch (errno(rc)) {
                 .SUCCESS => return Maybe(WaitPidResult){
                     .result = .{

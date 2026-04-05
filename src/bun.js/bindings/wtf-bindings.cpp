@@ -23,6 +23,33 @@ static std::once_flag reset_once_flag;
 static int current_tty_mode = 0;
 static struct termios orig_tty_termios;
 
+// On FreeBSD, libuv provides uv__tcsetattr and uv_tty_reset_mode.
+// We define static local versions to avoid duplicate symbol conflicts.
+#if defined(__FreeBSD__)
+static int bun__tcsetattr(int fd, int how, const struct termios* term)
+{
+    int rc;
+    do
+        rc = tcsetattr(fd, how, term);
+    while (rc == -1 && errno == EINTR);
+    if (rc == -1)
+        return errno;
+    return 0;
+}
+
+static int bun__tty_reset_mode(void)
+{
+    int saved_errno = errno;
+    if (atomic_exchange(&orig_termios_spinlock, 1))
+        return 16; // UV_EBUSY
+    int err = 0;
+    if (orig_termios_fd != -1)
+        err = bun__tcsetattr(orig_termios_fd, TCSANOW, &orig_termios);
+    atomic_store(&orig_termios_spinlock, 0);
+    errno = saved_errno;
+    return err;
+}
+#else
 int uv__tcsetattr(int fd, int how, const struct termios* term)
 {
     int rc;
@@ -56,6 +83,7 @@ extern "C" int uv_tty_reset_mode(void)
 
     return err;
 }
+#endif
 
 static void uv__tty_make_raw(struct termios* tio)
 {
@@ -143,7 +171,11 @@ extern "C" int Bun__ttySetMode(int fd, int mode)
 
         std::call_once(reset_once_flag, [] {
             Bun__atexit([] {
+#if defined(__FreeBSD__)
+                bun__tty_reset_mode();
+#else
                 uv_tty_reset_mode();
+#endif
             });
         });
         break;
@@ -152,14 +184,22 @@ extern "C" int Bun__ttySetMode(int fd, int mode)
 
         std::call_once(reset_once_flag, [] {
             Bun__atexit([] {
+#if defined(__FreeBSD__)
+                bun__tty_reset_mode();
+#else
                 uv_tty_reset_mode();
+#endif
             });
         });
         break;
     }
 
     /* Apply changes after draining */
+#if defined(__FreeBSD__)
+    rc = bun__tcsetattr(fd, TCSADRAIN, &tmp);
+#else
     rc = uv__tcsetattr(fd, TCSADRAIN, &tmp);
+#endif
     if (rc == 0)
         current_tty_mode = mode;
 

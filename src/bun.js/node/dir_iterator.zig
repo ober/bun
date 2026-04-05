@@ -54,7 +54,7 @@ pub fn NewIterator(comptime use_windows_ospath: bool) type {
                         const rc = std.c.getdirentries(self.dir.cast(), &self.buf, self.buf.len, &self.seek);
                         if (rc == 0) return .{ .result = null };
                         if (rc < 0) {
-                            return Result.errno(@intCast(-rc), .getdirentries);
+                            if (Result.errnoSys(rc, .getdirentries64)) |err| return err;
                         }
                         self.index = 0;
                         self.end_index = @intCast(rc);

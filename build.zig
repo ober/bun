@@ -759,7 +759,8 @@ fn configureObj(b: *Build, opts: *BunBuildOptions, obj: *Compile) void {
             obj.llvm_codegen_threads = opts.llvm_codegen_threads orelse 0;
     }
 
-    obj.no_link_obj = opts.os != .windows and !opts.no_llvm;
+    if (@hasField(std.meta.Child(@TypeOf(obj)), "no_link_obj"))
+        obj.no_link_obj = opts.os != .windows and !opts.no_llvm;
 
     if (opts.enable_asan and !enableFastBuild(b)) {
         if (@hasField(Build.Module, "sanitize_address")) {
@@ -852,7 +853,7 @@ fn addInternalImports(b: *Build, mod: *Module, opts: *BunBuildOptions) void {
 
     const zlib_internal_path = switch (os) {
         .windows => "src/deps/zlib.win32.zig",
-        .linux, .mac => "src/deps/zlib.posix.zig",
+        .linux, .mac, .freebsd => "src/deps/zlib.posix.zig",
         else => null,
     };
     if (zlib_internal_path) |path| {
@@ -862,7 +863,7 @@ fn addInternalImports(b: *Build, mod: *Module, opts: *BunBuildOptions) void {
     }
 
     const async_path = switch (os) {
-        .linux, .mac => "src/async/posix_event_loop.zig",
+        .linux, .mac, .freebsd => "src/async/posix_event_loop.zig",
         .windows => "src/async/windows_event_loop.zig",
         else => "src/async/stub_event_loop.zig",
     };

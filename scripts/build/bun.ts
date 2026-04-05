@@ -84,6 +84,18 @@ function systemLibs(cfg: Config): string[] {
     // execinfo: backtrace support (libexecinfo)
     // util: openpty / login_tty
     libs.push("-lc", "-lpthread", "-lkvm", "-lexecinfo", "-lutil");
+    // The prebuilt WebKit is a Linux build compiled with GCC's libstdc++.
+    // Bun C++ is compiled with GCC 13 libstdc++ headers (see flags.ts) to
+    // match the ABI.  Link static libstdc++ + libstdc++fs in a group so the
+    // linker can resolve circular refs between the archives.
+    libs.push(
+      "-Wl,--start-group",
+      "/usr/local/lib/gcc13/libstdc++.a",
+      "/usr/local/lib/gcc13/libstdc++fs.a",
+      "-Wl,--end-group",
+      "-L/usr/local/lib/gcc13",
+      "-lgcc_s",
+    );
     if (cfg.webkit === "local") {
       libs.push("-licudata", "-licui18n", "-licuuc");
     }

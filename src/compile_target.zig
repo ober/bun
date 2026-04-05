@@ -299,6 +299,9 @@ pub fn isSupported(this: *const CompileTarget) bool {
         .mac => true,
         .linux => true,
 
+        // FreeBSD is not yet supported as a cross-compilation target for bun build --compile.
+        .freebsd => false,
+
         .wasm => false,
     };
 }

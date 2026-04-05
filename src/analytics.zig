@@ -261,7 +261,15 @@ pub const GenerateHeader = struct {
             return platform;
         }
 
-        pub var linux_os_name: std.c.utsname = undefined;
+        const FreeBSDUtsname = extern struct {
+            sysname: [256]u8,
+            nodename: [256]u8,
+            release: [256]u8,
+            version: [256]u8,
+            machine: [256]u8,
+        };
+        const OsUtsname = if (Environment.isFreeBSD) FreeBSDUtsname else std.c.utsname;
+        pub var linux_os_name: OsUtsname = undefined;
         var platform_: analytics.Platform = undefined;
         pub const Platform = analytics.Platform;
         var linux_kernel_version: Semver.Version = undefined;
@@ -339,7 +347,12 @@ pub const GenerateHeader = struct {
         fn forLinux() analytics.Platform {
             linux_os_name = std.mem.zeroes(@TypeOf(linux_os_name));
 
-            _ = std.c.uname(&linux_os_name);
+            if (comptime Environment.isFreeBSD) {
+                const uname_fn = @extern(*const fn (buf: *FreeBSDUtsname) callconv(.c) c_int, .{ .name = "uname" });
+                _ = uname_fn(&linux_os_name);
+            } else {
+                _ = std.c.uname(&linux_os_name);
+            }
 
             // Confusingly, the "release" tends to contain the kernel version much more frequently than the "version" field.
             const release = bun.sliceTo(&linux_os_name.release, 0);
@@ -347,6 +360,10 @@ pub const GenerateHeader = struct {
             // Linux DESKTOP-P4LCIEM 5.10.16.3-microsoft-standard-WSL2 #1 SMP Fri Apr 2 22:23:49 UTC 2021 x86_64 x86_64 x86_64 GNU/Linux
             if (std.mem.indexOf(u8, release, "microsoft") != null) {
                 return analytics.Platform{ .os = analytics.OperatingSystem.wsl, .version = release, .arch = platform_arch };
+            }
+
+            if (comptime Environment.isFreeBSD) {
+                return analytics.Platform{ .os = analytics.OperatingSystem.linux, .version = release, .arch = platform_arch };
             }
 
             return analytics.Platform{ .os = analytics.OperatingSystem.linux, .version = release, .arch = platform_arch };

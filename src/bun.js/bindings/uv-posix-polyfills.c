@@ -41,6 +41,10 @@ uint64_t uv__hrtime(uv_clocktype_t type);
 #include "uv-posix-polyfills-posix.c"
 #endif
 
+// On FreeBSD, libuv is fully linked in and provides these functions natively.
+// Only define them on Linux/Darwin where we use a minimal libuv polyfill.
+#if !defined(__FreeBSD__)
+
 uv_pid_t uv_os_getpid()
 {
     return getpid();
@@ -137,5 +141,7 @@ UV_EXTERN void uv_mutex_unlock(uv_mutex_t* mutex)
     if (pthread_mutex_unlock(mutex))
         abort();
 }
+
+#endif /* !defined(__FreeBSD__) */
 
 #endif

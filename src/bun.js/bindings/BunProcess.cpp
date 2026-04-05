@@ -734,7 +734,7 @@ JSC_DEFINE_HOST_FUNCTION(Process_functionDlopen, (JSC::JSGlobalObject * globalOb
     JSC::JSValue resultValue = encoded == 0 ? exports : JSValue::decode(encoded);
 
     if (auto resultObject = resultValue.getObject()) {
-#if OS(DARWIN) || OS(LINUX)
+#if OS(DARWIN) || OS(LINUX) || defined(__FreeBSD__)
         // If this is a native bundler plugin we want to store the handle from dlopen
         // as we are going to call `dlsym()` on it later to get the plugin implementation.
         const char** pointer_to_plugin_name = (const char**)dlsym(handle, "BUN_PLUGIN_NAME");
@@ -1480,7 +1480,8 @@ static void onDidChangeListeners(EventEmitter& eventEmitter, const Identifier& e
             // windows has no SIGSTOP
             if (signalNumber != SIGKILL) {
 #else
-#error unknown OS
+            // FreeBSD and other POSIX: SIGKILL and SIGSTOP cannot be handled
+            if (signalNumber != SIGKILL && signalNumber != SIGSTOP) {
 #endif
 
                 if (isAdded) {
@@ -2293,7 +2294,18 @@ static JSValue constructProcessConfigObject(VM& vm, JSObject* processObject)
     variables->putDirect(vm, JSC::Identifier::fromString(vm, "force_dynamic_crt"_s), JSC::jsNumber(0), 0);
     variables->putDirect(vm, JSC::Identifier::fromString(vm, "napi_build"_s), JSC::jsString(vm, String("0.0"_s)), 0);
 #else
-#error "Unsupported OS"
+    // FreeBSD and other POSIX platforms
+    variables->putDirect(vm, JSC::Identifier::fromString(vm, "control_flow_guard"_s), JSC::jsBoolean(false), 0);
+    variables->putDirect(vm, JSC::Identifier::fromString(vm, "coverage"_s), JSC::jsBoolean(false), 0);
+    variables->putDirect(vm, JSC::Identifier::fromString(vm, "dcheck_always_on"_s), JSC::jsNumber(0), 0);
+    variables->putDirect(vm, JSC::Identifier::fromString(vm, "debug_nghttp2"_s), JSC::jsBoolean(false), 0);
+    variables->putDirect(vm, JSC::Identifier::fromString(vm, "debug_node"_s), JSC::jsBoolean(false), 0);
+    variables->putDirect(vm, JSC::Identifier::fromString(vm, "enable_lto"_s), JSC::jsBoolean(false), 0);
+    variables->putDirect(vm, JSC::Identifier::fromString(vm, "enable_pgo_generate"_s), JSC::jsBoolean(false), 0);
+    variables->putDirect(vm, JSC::Identifier::fromString(vm, "enable_pgo_use"_s), JSC::jsBoolean(false), 0);
+    variables->putDirect(vm, JSC::Identifier::fromString(vm, "error_on_warn"_s), JSC::jsBoolean(false), 0);
+    variables->putDirect(vm, JSC::Identifier::fromString(vm, "force_dynamic_crt"_s), JSC::jsNumber(0), 0);
+    variables->putDirect(vm, JSC::Identifier::fromString(vm, "napi_build"_s), JSC::jsString(vm, String("0.0"_s)), 0);
 #endif
 
 #if CPU(X86_64)

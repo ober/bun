@@ -665,7 +665,8 @@ win: {
     const C = bun.c;
     break :posix struct {
         pub const IN4ADDR_LOOPBACK = C.IN4ADDR_LOOPBACK;
-        pub const INET6_ADDRSTRLEN = C.INET6_ADDRSTRLEN;
+        // INET6_ADDRSTRLEN (46) may not be in the translated C headers on all platforms.
+        pub const INET6_ADDRSTRLEN = if (@hasDecl(C, "INET6_ADDRSTRLEN")) C.INET6_ADDRSTRLEN else @as(c_int, 46);
         // Make sure this is in line with IN6ADDR_ANY_INIT in `netinet/in.h` on all platforms.
         pub const IN6ADDR_ANY_INIT: [16]u8 = .{0} ** 16;
         pub const AF_INET = C.AF_INET;

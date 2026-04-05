@@ -602,7 +602,7 @@ pub const CopyFile = struct {
             // not file-to-file, so we fall back to the portable path)
             const src_fd = this.source_fd;
             const dest_fd = this.destination_fd;
-            const total_size: SizeType = if (stat.size != 0) @min(@intCast(stat.size), this.max_length) else this.max_length;
+            const total_size: SizeType = if (stat.size != 0) @min(@as(SizeType, @intCast(stat.size)), this.max_length) else this.max_length;
             var total_written: usize = 0;
             switch (jsc.Node.fs.NodeFS.copyFileUsingReadWriteLoop("", "", src_fd, dest_fd, total_size, &total_written)) {
                 .err => |err| {

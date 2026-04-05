@@ -112,7 +112,7 @@ function prebuiltIcuLibs(cfg: Config): string[] {
     const d = cfg.debug ? "d" : "";
     return [`lib/sicudt${d}.lib`, `lib/sicuin${d}.lib`, `lib/sicuuc${d}.lib`];
   }
-  if (cfg.linux) {
+  if (cfg.linux || cfg.freebsd) {
     return ["lib/libicudata.a", "lib/libicui18n.a", "lib/libicuuc.a"];
   }
   return []; // darwin: system ICU

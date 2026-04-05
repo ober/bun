@@ -114,10 +114,29 @@ pub const windows = struct {
     };
 };
 
+pub const freebsd = struct {
+    pub const memmem = bun.c.memmem;
+
+    // FreeBSD uses stat/lstat/fstat directly (no stat64 variant).
+    pub const lstat = blk: {
+        const T = *const fn (?[*:0]const u8, ?*bun.Stat) callconv(.c) c_int;
+        break :blk @extern(T, .{ .name = "lstat" });
+    };
+    pub const fstat = blk: {
+        const T = *const fn (i32, ?*bun.Stat) callconv(.c) c_int;
+        break :blk @extern(T, .{ .name = "fstat" });
+    };
+    pub const stat = blk: {
+        const T = *const fn (?[*:0]const u8, ?*bun.Stat) callconv(.c) c_int;
+        break :blk @extern(T, .{ .name = "stat" });
+    };
+};
+
 pub const current = switch (bun.Environment.os) {
     .linux => linux,
     .windows => windows,
     .mac => darwin,
+    .freebsd => freebsd,
     else => struct {},
 };
 

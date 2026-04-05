@@ -376,7 +376,7 @@ const LibUtil = struct {
 
 fn getOpenPtyFn() ?OpenPtyFn {
     // On macOS and FreeBSD, openpty is in libc/libutil.a which is always linked
-    if (comptime Environment.isMac or comptime Environment.isFreeBSD) {
+    if (comptime (Environment.isMac or Environment.isFreeBSD)) {
         const c = struct {
             extern "c" fn openpty(
                 amaster: *c_int,
@@ -433,8 +433,13 @@ fn createPtyPosix(cols: u16, rows: u16) CreatePtyError!PtyResult {
             .IXANY = true, // Any character restarts output
             .IMAXBEL = true, // Ring bell on input queue full
             .BRKINT = true, // Signal interrupt on break
-            .IUTF8 = true, // Input is UTF-8
         };
+        if (comptime bun.Environment.isMac) {
+            t.iflag.IUTF8 = true; // Input is UTF-8 (macOS named field)
+        } else if (comptime bun.Environment.isFreeBSD) {
+            // IUTF8 = 0x4000 on FreeBSD; not in Zig stdlib FreeBSD tc_iflag_t, set bit manually
+            t.iflag = @bitCast(@as(u32, @bitCast(t.iflag)) | 0x4000);
+        }
 
         // Output flags: standard terminal output processing
         t.oflag = .{

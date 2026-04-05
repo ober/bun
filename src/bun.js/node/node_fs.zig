@@ -3743,6 +3743,47 @@ pub const NodeFS = struct {
             return ret.success;
         }
 
+        if (comptime Environment.isFreeBSD) {
+            var src_buf: bun.PathBuffer = undefined;
+            var dest_buf: bun.PathBuffer = undefined;
+            const src = args.src.sliceZ(&src_buf);
+            const dest = args.dest.sliceZ(&dest_buf);
+
+            const src_fd = switch (Syscall.open(src, bun.O.RDONLY, 0o644)) {
+                .result => |result| result,
+                .err => |err| return .{ .err = err },
+            };
+            defer src_fd.close();
+
+            const stat_ = switch (Syscall.fstat(src_fd)) {
+                .result => |result| result,
+                .err => |err| return Maybe(Return.CopyFile){ .err = err },
+            };
+
+            if (!posix.S.ISREG(stat_.mode)) {
+                return Maybe(Return.CopyFile){ .err = .{ .errno = @intFromEnum(SystemErrno.ENOTSUP), .syscall = .copyfile } };
+            }
+
+            var flags: i32 = bun.O.CREAT | bun.O.WRONLY;
+            var wrote: u64 = 0;
+            if (args.mode.shouldntOverwrite()) {
+                flags |= bun.O.EXCL;
+            }
+
+            const dest_fd = switch (Syscall.open(dest, flags, jsc.Node.fs.default_permission)) {
+                .result => |result| result,
+                .err => |err| return Maybe(Return.CopyFile){ .err = err },
+            };
+            defer {
+                _ = Syscall.ftruncate(dest_fd, @as(std.c.off_t, @intCast(@as(u63, @truncate(wrote)))));
+                _ = Syscall.fchmod(dest_fd, stat_.mode);
+                dest_fd.close();
+            }
+
+            const size: usize = @intCast(@max(stat_.size, 0));
+            return copyFileUsingReadWriteLoop(src, dest, src_fd, dest_fd, size, &wrote);
+        }
+
         @compileError("unreachable");
     }
 

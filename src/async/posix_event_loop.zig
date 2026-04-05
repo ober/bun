@@ -513,15 +513,19 @@ pub const FilePoll = struct {
         }
 
         pub fn fromKQueueEvent(kqueue_event: KEvent) Flags.Set {
+            // EV_EOF = 0x8000 on both macOS and FreeBSD.
+            // FreeBSD's std.posix.system.EV does not define EOF as a named field,
+            // so we use the raw value directly.
+            const EV_EOF: u16 = 0x8000;
             var flags = Flags.Set{};
             if (kqueue_event.filter == std.posix.system.EVFILT.READ) {
                 flags.insert(Flags.readable);
-                if (kqueue_event.flags & std.posix.system.EV.EOF != 0) {
+                if (kqueue_event.flags & EV_EOF != 0) {
                     flags.insert(Flags.hup);
                 }
             } else if (kqueue_event.filter == std.posix.system.EVFILT.WRITE) {
                 flags.insert(Flags.writable);
-                if (kqueue_event.flags & std.posix.system.EV.EOF != 0) {
+                if (kqueue_event.flags & EV_EOF != 0) {
                     flags.insert(Flags.hup);
                 }
             } else if (kqueue_event.filter == std.posix.system.EVFILT.PROC) {
@@ -1231,11 +1235,10 @@ pub const FreeBSDWaker = struct {
     write_fd: bun.FileDescriptor,
 
     pub fn init() !Waker {
-        var fds: [2]std.posix.fd_t = undefined;
-        try std.posix.pipe2(&fds, .{ .CLOEXEC = true, .NONBLOCK = true });
+        const pipe_fds = try std.posix.pipe2(.{ .CLOEXEC = true, .NONBLOCK = true });
         return Waker{
-            .read_fd = .fromNative(fds[0]),
-            .write_fd = .fromNative(fds[1]),
+            .read_fd = .fromNative(pipe_fds[0]),
+            .write_fd = .fromNative(pipe_fds[1]),
         };
     }
 

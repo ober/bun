@@ -25,7 +25,8 @@ DEFINE_NATIVE_MODULE(NodeProcess)
     exportNames.append(vm.propertyNames->defaultKeyword);
     exportValues.append(process);
 
-    for (auto& entry : properties.releaseData()->propertyNameVector()) {
+    auto propertiesData = properties.releaseData();
+    for (auto& entry : propertiesData->propertyNameVector()) {
         if (entry == vm.propertyNames->defaultKeyword) {
             // skip because it's already on the default
             // export (the Process object itself)

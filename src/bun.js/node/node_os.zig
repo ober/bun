@@ -283,7 +283,7 @@ fn cpusImplFreeBSD(globalThis: *jsc.JSGlobalObject) !jsc.JSValue {
 
     // Get SC_CLK_TCK multiplier (ms per tick)
     const ticks: i64 = bun_sysconf__SC_CLK_TCK();
-    const multiplier: u64 = if (ticks > 0) @intCast(1000 / ticks) else 1;
+    const multiplier: u64 = if (ticks > 0) @intCast(@divTrunc(1000, ticks)) else 1;
 
     const values = try jsc.JSValue.createEmptyArray(globalThis, @intCast(num_cpus));
     var i: u32 = 0;
@@ -549,7 +549,7 @@ fn networkInterfacesPosix(globalThis: *jsc.JSGlobalObject) bun.JSError!jsc.JSVal
             if (iface.ifa_addr == null) return false;
             return if (comptime Environment.isLinux)
                 return iface.ifa_addr.*.sa_family == std.posix.AF.PACKET
-            else if (comptime Environment.isMac or comptime Environment.isFreeBSD)
+            else if (comptime (Environment.isMac or Environment.isFreeBSD))
                 return iface.ifa_addr.?.*.sa_family == std.posix.AF.LINK
             else
                 @compileError("unreachable");
@@ -645,7 +645,7 @@ fn networkInterfacesPosix(globalThis: *jsc.JSGlobalObject) bun.JSError!jsc.JSVal
                 //  cast to a link-layer socket address
                 if (comptime Environment.isLinux) {
                     break @as(?*std.posix.sockaddr.ll, @ptrCast(@alignCast(ll_iface.ifa_addr)));
-                } else if (comptime Environment.isMac or comptime Environment.isFreeBSD) {
+                } else if (comptime (Environment.isMac or Environment.isFreeBSD)) {
                     break @as(?*c.sockaddr_dl, @ptrCast(@alignCast(ll_iface.ifa_addr)));
                 } else {
                     @compileError("unreachable");
@@ -656,7 +656,7 @@ fn networkInterfacesPosix(globalThis: *jsc.JSGlobalObject) bun.JSError!jsc.JSVal
                 // Encode its link-layer address.  We need 2*6 bytes for the
                 //  hex characters and 5 for the colon separators
                 var mac_buf: [17]u8 = undefined;
-                const addr_data = if (comptime Environment.isLinux) ll_addr.addr else if (comptime Environment.isMac or comptime Environment.isFreeBSD) ll_addr.sdl_data[ll_addr.sdl_nlen..] else @compileError("unreachable");
+                const addr_data = if (comptime Environment.isLinux) ll_addr.addr else if (comptime (Environment.isMac or Environment.isFreeBSD)) ll_addr.sdl_data[ll_addr.sdl_nlen..] else @compileError("unreachable");
                 if (addr_data.len < 6) {
                     const mac = "00:00:00:00:00:00";
                     interface.put(globalThis, jsc.ZigString.static("mac"), jsc.ZigString.init(mac).withEncoding().toJS(globalThis));

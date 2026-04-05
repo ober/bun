@@ -244,6 +244,53 @@ extern "C" void on_before_reload_process_linux()
 
 #endif
 
+#if defined(__FreeBSD__)
+// FreeBSD equivalent of on_before_reload_process_linux:
+// unset FD_CLOEXEC on stdio and reset signals before exec.
+
+#include <sys/syscall.h>
+#include <dirent.h>
+#include <limits.h>
+
+static void unset_cloexec(int fd)
+{
+    int flags = fcntl(fd, F_GETFD, 0);
+    if (flags == -1) return;
+    flags &= ~FD_CLOEXEC;
+    fcntl(fd, F_SETFD, flags);
+}
+
+extern "C" void on_before_reload_process_linux()
+{
+    unset_cloexec(STDIN_FILENO);
+    unset_cloexec(STDOUT_FILENO);
+    unset_cloexec(STDERR_FILENO);
+
+    // Close all fds >= 3 that have FD_CLOEXEC set.
+    // FreeBSD doesn't have close_range, so iterate /dev/fd.
+    DIR* dir = opendir("/dev/fd");
+    if (dir) {
+        int dirfd_ = dirfd(dir);
+        struct dirent* entry;
+        while ((entry = readdir(dir)) != nullptr) {
+            if (entry->d_name[0] == '.') continue;
+            int fd = atoi(entry->d_name);
+            if (fd > 2 && fd != dirfd_) {
+                int flags = fcntl(fd, F_GETFD, 0);
+                if (flags != -1 && (flags & FD_CLOEXEC))
+                    close(fd);
+            }
+        }
+        closedir(dir);
+    }
+
+    // Reset all signals to default
+    sigset_t signal_set;
+    sigemptyset(&signal_set);
+    sigprocmask(SIG_SETMASK, &signal_set, nullptr);
+}
+#endif
+
 #define LSHPACK_MAX_HEADER_SIZE 65536
 
 static thread_local char shared_header_buffer[LSHPACK_MAX_HEADER_SIZE];
@@ -460,7 +507,7 @@ extern "C" void bun_initialize_process()
     bun_close_range(4, ~0U, CLOSE_RANGE_CLOEXEC);
 #endif
 
-#if OS(LINUX) || OS(DARWIN)
+#if OS(LINUX) || OS(DARWIN) || defined(__FreeBSD__)
 
     int devNullFd_ = -1;
     bool anyTTYs = false;
@@ -584,7 +631,7 @@ extern "C" int32_t open_as_nonblocking_tty(int32_t fd, int32_t mode)
 static bool can_open_as_nonblocking_tty(int32_t fd)
 {
     int result;
-#if OS(LINUX) || OS(FreeBSD)
+#if OS(LINUX) || OS(FREEBSD)
     int dummy = 0;
 
     result = ioctl(fd, TIOCGPTN, &dummy) != 0;
@@ -596,7 +643,9 @@ static bool can_open_as_nonblocking_tty(int32_t fd)
 
 #else
 
-#error "TODO"
+    // Unknown POSIX platform - try the Linux approach
+    int dummy = 0;
+    result = ioctl(fd, TIOCGPTN, &dummy) != 0;
 
 #endif
 
@@ -767,7 +816,7 @@ extern "C" int ffi_fileno(FILE* file)
 
 // Handle signals in bun.spawnSync.
 // If we receive a signal, we want to forward the signal to the child process.
-#if OS(LINUX) || OS(DARWIN)
+#if OS(LINUX) || OS(DARWIN) || defined(__FreeBSD__)
 #include <signal.h>
 #include <pthread.h>
 
@@ -802,7 +851,7 @@ static struct sigaction previous_actions[NSIG];
 
 #endif
 
-#if OS(DARWIN)
+#if OS(DARWIN) || defined(__FreeBSD__)
 #define FOR_EACH_SIGNAL(M) FOR_EACH_POSIX_SIGNAL(M)
 #endif
 
@@ -876,7 +925,7 @@ extern "C" void Bun__unregisterSignalsForForwarding()
 
 #endif
 
-#if OS(LINUX) || OS(DARWIN)
+#if OS(LINUX) || OS(DARWIN) || defined(__FreeBSD__)
 #include <paths.h>
 
 extern "C" const char* BUN_DEFAULT_PATH_FOR_SPAWN = _PATH_DEFPATH;
@@ -912,7 +961,7 @@ extern "C" void Bun__signpost_emit(os_log_t log, os_signpost_type_t type, os_sig
 
 #endif // OS(DARWIN) signpost code
 
-#if OS(DARWIN) || defined(__linux__)
+#if OS(DARWIN) || defined(__linux__) || defined(__FreeBSD__)
 
 #define BLOB_HEADER_ALIGNMENT 16 * 1024
 
@@ -932,7 +981,7 @@ extern "C" uint64_t* Bun__getStandaloneModuleGraphMachoLength()
     return &BUN_COMPILED.size;
 }
 
-#else // __linux__
+#else // __linux__ or __FreeBSD__
 
 extern "C" BlobHeader __attribute__((section(".bun"), aligned(BLOB_HEADER_ALIGNMENT), used)) BUN_COMPILED = { 0 };
 
@@ -941,7 +990,7 @@ extern "C" uint64_t* Bun__getStandaloneModuleGraphELFVaddr()
     return &BUN_COMPILED.size;
 }
 
-#endif // OS(DARWIN) / __linux__
+#endif // OS(DARWIN) / __linux__ / __FreeBSD__
 
 #elif defined(_WIN32)
 // Windows PE section handling

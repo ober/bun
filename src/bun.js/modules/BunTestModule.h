@@ -24,7 +24,8 @@ void generateNativeModule_BunTest(
         return;
     }
 
-    for (auto& property : properties.releaseData()->propertyNameVector()) {
+    auto propertiesData = properties.releaseData();
+    for (auto& property : propertiesData->propertyNameVector()) {
         JSC::PropertySlot slot(object, JSC::PropertySlot::InternalMethodType::Get);
         auto ownPropertySlot = object->methodTable()->getOwnPropertySlot(object, lexicalGlobalObject, property, slot);
         if (topExceptionScope.exception()) [[unlikely]] {

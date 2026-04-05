@@ -31,22 +31,29 @@ function convertZigEnum(zig: string, names: string[]) {
   return output;
 }
 
-function css(file: string, is_development: boolean): string {
-  // Use child_process.spawnSync for FreeBSD compat
-  const _r = _nodeSpawnSync(process.execPath, ["build", file, "--minify"], {
-    cwd: import.meta.dirname,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const success = _r.status === 0;
-  const stdout = _r.stdout;
-  const stderr = _r.stderr;
-  if (!success) throw new Error(stderr.toString("utf-8"));
-  return stdout.toString("utf-8");
+async function css(file: string, is_development: boolean): Promise<string> {
+  // Read the CSS file directly to avoid spawning a subprocess.
+  // (posix_spawn fails under FreeBSD's Linux compat layer with EACCES.)
+  //
+  // IMPORTANT: always strip /* */ comments since Bun.build() define values are
+  // serialized through an internal JSON file, and JSON does not support comments.
+  const content = readFileSync(join(import.meta.dirname, file), "utf-8");
+  // Basic CSS minification: strip comments and collapse whitespace
+  const stripped = content
+    .replace(/\/\*[\s\S]*?\*\//g, "")     // remove block comments
+    .replace(/\s+/g, " ")                  // collapse whitespace runs
+    .replace(/\s*([{}:;,>~+])\s*/g, "$1") // remove spaces around syntax chars
+    .replace(/;\s*}/g, "}")                // remove trailing semicolons before }
+    .trim();
+  return stripped;
 }
 
 async function run() {
   const devServerZig = readFileSync(join(base_dir, "DevServer.zig"), "utf-8");
   writeIfNotChanged(join(base_dir, "generated.ts"), convertZigEnum(devServerZig, ["IncomingMessageId", "MessageId"]));
+
+  // Pre-compute CSS values (async) before using in define
+  const overlayCss = await css("../bake/client/overlay.css", !!debug);
 
   const results = await Promise.allSettled(
     ["client", "server", "error"].map(async file => {
@@ -57,7 +64,7 @@ async function run() {
           side: JSON.stringify(side),
           IS_ERROR_RUNTIME: String(file === "error"),
           IS_BUN_DEVELOPMENT: String(!!debug),
-          OVERLAY_CSS: css("../bake/client/overlay.css", !!debug),
+          OVERLAY_CSS: overlayCss,
         },
         minify: {
           syntax: !debug,

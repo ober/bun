@@ -69,7 +69,27 @@ pub fn uv_getrusage(process: *uv.uv_process_t) win_rusage {
 
     return usage_info;
 }
-pub const Rusage = if (Environment.isWindows) win_rusage else std.posix.rusage;
+const freebsd_rusage = extern struct {
+    utime: std.c.timeval,
+    stime: std.c.timeval,
+    maxrss: isize,
+    ixrss: isize,
+    idrss: isize,
+    isrss: isize,
+    minflt: isize,
+    majflt: isize,
+    nswap: isize,
+    inblock: isize,
+    oublock: isize,
+    msgsnd: isize,
+    msgrcv: isize,
+    nsignals: isize,
+    nvcsw: isize,
+    nivcsw: isize,
+    pub const SELF: c_int = 0;
+    pub const CHILDREN: c_int = -1;
+};
+pub const Rusage = if (Environment.isWindows) win_rusage else if (Environment.isFreeBSD) freebsd_rusage else std.posix.rusage;
 
 // const ShellSubprocessMini = bun.shell.ShellSubprocessMini;
 pub const ProcessExitHandler = struct {
@@ -207,7 +227,7 @@ pub const Process = struct {
             .status = brk: {
                 if (posix.has_exited) {
                     var rusage = std.mem.zeroes(Rusage);
-                    const waitpid_result = PosixSpawn.wait4(posix.pid, 0, &rusage);
+                    const waitpid_result = PosixSpawn.wait4(posix.pid, 0, @as(?*anyopaque, &rusage));
                     break :brk Status.from(posix.pid, &waitpid_result) orelse Status{ .running = {} };
                 }
 
@@ -249,7 +269,7 @@ pub const Process = struct {
 
     pub fn waitPosix(this: *Process, sync_: bool) void {
         var rusage = std.mem.zeroes(Rusage);
-        const waitpid_result = PosixSpawn.wait4(this.pid, if (sync_) 0 else std.posix.W.NOHANG, &rusage);
+        const waitpid_result = PosixSpawn.wait4(this.pid, if (sync_) 0 else std.posix.W.NOHANG, @as(?*anyopaque, &rusage));
         this.onWaitPid(&waitpid_result, &rusage);
     }
 
@@ -305,7 +325,7 @@ pub const Process = struct {
                                 // should become available basically immediately. Also, testing has shown that this
                                 // occurs extremely rarely and only under high load.
                                 0,
-                                &rusage_result,
+                                @as(?*anyopaque, &rusage_result),
                             ));
                         }
                     }
@@ -859,7 +879,7 @@ const WaiterThreadPosix = struct {
                     }
 
                     var rusage = std.mem.zeroes(Rusage);
-                    const result = PosixSpawn.wait4(pid, std.posix.W.NOHANG, &rusage);
+                    const result = PosixSpawn.wait4(pid, std.posix.W.NOHANG, @as(?*anyopaque, &rusage));
                     if (result == .err or (result == .result and result.result.pid == pid)) {
                         remove = true;
 
@@ -1285,7 +1305,11 @@ pub fn spawnProcessPosix(
     }
 
     if (options.detached) {
-        flags |= bun.c.POSIX_SPAWN_SETSID;
+        // POSIX_SPAWN_SETSID is not available on FreeBSD.
+        // TODO: implement setsid for detached processes on FreeBSD via a different mechanism.
+        if (comptime !Environment.isFreeBSD) {
+            flags |= bun.c.POSIX_SPAWN_SETSID;
+        }
     }
 
     // Pass PTY slave fd to attr for controlling terminal setup

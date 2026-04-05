@@ -266,6 +266,13 @@ pub const FD = packed struct(backing_int) {
                     else => null,
                 };
             },
+            .freebsd => result: {
+                bun.assert(fd.native() >= 0);
+                break :result switch (bun.sys.getErrno(bun.sys.syscall.close(fd.native()))) {
+                    .BADF => .{ .errno = @intFromEnum(E.BADF), .syscall = .close, .fd = fd },
+                    else => null,
+                };
+            },
             .windows => switch (fd.decodeWindows()) {
                 .uv => |file_number| result: {
                     var req: libuv.fs_t = libuv.fs_t.uninitialized;

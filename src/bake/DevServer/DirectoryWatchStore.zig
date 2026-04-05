@@ -136,8 +136,8 @@ fn insert(
         &(std.posix.toPosixPath(dir_name_to_watch) catch |err| switch (err) {
             error.NameTooLong => return error.Ignore, // wouldn't be able to open, ignore
         }),
-        // O_EVTONLY is the flag to indicate that only watches will be used.
-        bun.O.DIRECTORY | bun.c.O_EVTONLY,
+        // O_EVTONLY (macOS) or O_RDONLY (FreeBSD) to open for kqueue watching.
+        bun.O.DIRECTORY | if (comptime bun.Environment.isMac) bun.c.O_EVTONLY else 0,
         0,
     )) {
         .result => |fd| .{ fd, true },

@@ -21,7 +21,8 @@ generateObjectModuleSourceCode(JSC::JSGlobalObject* globalObject,
         RETURN_IF_EXCEPTION(throwScope, void());
         gcUnprotectNullTolerant(object);
 
-        for (auto& entry : properties.releaseData()->propertyNameVector()) {
+        auto propertiesData1 = properties.releaseData();
+        for (auto& entry : propertiesData1->propertyNameVector()) {
             exportNames.append(entry);
 
             auto scope = DECLARE_TOP_EXCEPTION_SCOPE(vm);
@@ -58,7 +59,8 @@ generateObjectModuleSourceCodeForJSON(JSC::JSGlobalObject* globalObject,
         exportNames.append(vm.propertyNames->defaultKeyword);
         exportValues.append(object);
 
-        for (auto& entry : properties.releaseData()->propertyNameVector()) {
+        auto propertiesData2 = properties.releaseData();
+        for (auto& entry : propertiesData2->propertyNameVector()) {
             if (entry == vm.propertyNames->defaultKeyword) {
                 continue;
             }

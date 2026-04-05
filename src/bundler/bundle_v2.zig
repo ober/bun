@@ -2517,7 +2517,7 @@ pub const BundleV2 = struct {
                     const fd = if (bun.Watcher.requires_file_descriptors)
                         switch (bun.sys.open(
                             &(std.posix.toPosixPath(load.path) catch break :add_watchers),
-                            bun.c.O_EVTONLY,
+                            if (comptime bun.Environment.isMac) bun.c.O_EVTONLY else 0,
                             0,
                         )) {
                             .result => |fd| fd,

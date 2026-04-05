@@ -408,7 +408,7 @@ pub const Poll = struct {
     flags: Flags.Set = Flags.Set.initEmpty(),
     generation_number: GenerationNumberInt = 0,
 
-    const GenerationNumberInt = if (Environment.isMac and Environment.allow_assert) u64 else u0;
+    const GenerationNumberInt = if ((Environment.isMac or Environment.isFreeBSD) and Environment.allow_assert) u64 else u0;
 
     var generation_number_monotonic: GenerationNumberInt = 0;
 

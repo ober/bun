@@ -321,7 +321,7 @@ pub fn crashHandler(
                                 writer.print("(thread {d})", .{bun.c.GetCurrentThreadId()}) catch std.posix.abort();
                             }
                         },
-                        .mac, .linux => {},
+                        .mac, .linux, .freebsd => {},
                         .wasm => @compileError("TODO"),
                     }
 
@@ -1104,6 +1104,9 @@ const Platform = enum(u8) {
     windows_x86_64 = 'w',
     windows_x86_64_baseline = 'e',
     windows_aarch64 = 'W',
+
+    freebsd_x86_64 = 'f',
+    freebsd_aarch64 = 'F',
 
     const current = @field(Platform, @tagName(bun.Environment.os) ++
         "_" ++ @tagName(builtin.target.cpu.arch) ++

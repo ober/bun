@@ -42,6 +42,18 @@
 #include "cmakeconfig.h"
 #endif
 
+// FreeBSD: cmakeconfig.h was generated for Linux (uses libpas).
+// BPlatform.h does not enable libpas for FreeBSD, and cmakeconfig.h sets
+// USE_MIMALLOC=0 and USE_SYSTEM_MALLOC=0, which leaves no allocator selected.
+// Override to use system malloc on FreeBSD (WebKit's own allocator is not
+// bun's mimalloc — bun handles its own allocations separately).
+#if defined(__FreeBSD__)
+#undef USE_MIMALLOC
+#define USE_MIMALLOC 0
+#undef USE_SYSTEM_MALLOC
+#define USE_SYSTEM_MALLOC 1
+#endif
+
 #define JSC_API_AVAILABLE(...)
 #define JSC_CLASS_AVAILABLE(...) JS_EXPORT
 #define JSC_API_DEPRECATED(...)

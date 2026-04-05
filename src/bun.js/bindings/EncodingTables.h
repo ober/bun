@@ -57,7 +57,9 @@ inline void checkEncodingTableInvariants() {}
 
 // LLVM 21+ -Wcharacter-conversion flags intentional char32_t/char16_t comparisons
 // used for Unicode code point range checks in findFirstInSortedPairs.
+// Older LLVM versions don't know this warning group, so suppress that too.
 #pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunknown-warning-option"
 #pragma clang diagnostic ignored "-Wcharacter-conversion"
 struct CompareFirst {
     template<typename TypeA, typename TypeB> bool operator()(const TypeA& a, const TypeB& b)

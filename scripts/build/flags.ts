@@ -231,9 +231,14 @@ export const globalFlags: Flag[] = [
   },
 
   // ─── Sections (enables dead-code stripping at link) ───
+  // NOTE: disabled on FreeBSD — -ffunction-sections + -fdata-sections generates
+  // tens of thousands of ELF sections per .o file. With 600+ objects, lld needs
+  // to track millions of InputSection objects and runs OOM during splitSections.
+  // FreeBSD has only ~1.4GB free RAM during the link step, which is insufficient.
+  // Without these flags, sections merge normally and the link fits in memory.
   {
     flag: "-ffunction-sections",
-    when: c => c.unix,
+    when: c => c.unix && !c.freebsd,
     desc: "One section per function (for --gc-sections)",
   },
   {
@@ -243,7 +248,7 @@ export const globalFlags: Flag[] = [
   },
   {
     flag: "-fdata-sections",
-    when: c => c.unix,
+    when: c => c.unix && !c.freebsd,
     desc: "One section per data item (for --gc-sections)",
   },
   {
@@ -345,15 +350,54 @@ export const bunOnlyFlags: Flag[] = [
   // Not in globalFlags because deps set their own standard.
   {
     flag: "-std=gnu++23",
-    when: c => c.linux,
+    when: c => c.linux || c.freebsd,
     lang: "cxx",
-    desc: "C++23 with GNU extensions (required to match WebKit's ABI on Linux)",
+    desc: "C++23 with GNU extensions (required to match WebKit's ABI on Linux/FreeBSD — prebuilt uses libstdc++)",
   },
   {
     flag: "-std=c++23",
-    when: c => c.darwin || c.freebsd,
+    when: c => c.darwin,
     lang: "cxx",
     desc: "C++23 standard",
+  },
+  // FreeBSD: use GCC 13's libstdc++ headers so ABI matches the Linux prebuilt WebKit.
+  // clang on FreeBSD defaults to libc++ (std::__1 namespace), but the prebuilt uses
+  // libstdc++ (no __1 inline namespace). Using -nostdinc++ drops libc++ headers; adding
+  // GCC 13 headers with -isystem replaces them.
+  //
+  // GCC 13's os_defines.h (FreeBSD target) sets _GLIBCXX_USE_C99_CHECK=1 and
+  // _GLIBCXX_USE_C99_LONG_LONG_CHECK=1, which causes <cwchar> to re-declare wcstold,
+  // wcstoll, wcstoull with throw() — conflicting with FreeBSD's plain system declarations.
+  // Suppressing those re-declarations requires bypassing os_defines.h entirely by defining
+  // _GLIBCXX_OS_DEFINES (which guards the whole file), then re-setting the values that
+  // don't conflict (_GLIBCXX_USE_C99_STDIO/STDLIB/WCHAR stay 1; the CHECK/DYNAMIC ones
+  // go to 0 to skip the throw() re-declarations in <cwchar> and <cstdlib>).
+  //
+  // _GLIBCXX_NOTHROW is GCC's alias for noexcept; its empty string suppresses
+  // throw()-qualified re-declarations in <cstdlib>.
+  {
+    flag: [
+      "-nostdinc++",
+      "-isystem/usr/local/lib/gcc13/include/c++",
+      "-isystem/usr/local/lib/gcc13/include/c++/x86_64-portbld-freebsd15.0",
+      "-isystem/usr/local/lib/gcc13/include/c++/backward",
+      // Bypass GCC 13's os_defines.h (which unconditionally sets CHECK=1/DYNAMIC=expr)
+      // and provide our own values that avoid throw() conflicts with FreeBSD headers.
+      "-D_GLIBCXX_OS_DEFINES",
+      "-D_GLIBCXX_USE_C99_STDIO=1",
+      "-D_GLIBCXX_USE_C99_STDLIB=1",
+      "-D_GLIBCXX_USE_C99_WCHAR=1",
+      "-D_GLIBCXX_USE_C99_CHECK=0",
+      "-D_GLIBCXX_USE_C99_DYNAMIC=0",
+      "-D_GLIBCXX_USE_C99_LONG_LONG_CHECK=0",
+      "-D_GLIBCXX_USE_C99_LONG_LONG_DYNAMIC=0",
+      "-D_GLIBCXX_USE_C99_FLOAT_TRANSCENDENTALS_CHECK=0",
+      "-D_GLIBCXX_USE_C99_FLOAT_TRANSCENDENTALS_DYNAMIC=0",
+      "-D_GLIBCXX_NOTHROW=",
+    ],
+    when: c => c.freebsd,
+    lang: "cxx",
+    desc: "GCC 13 libstdc++ headers via -nostdinc++ (ABI compatibility with Linux WebKit prebuilt)",
   },
   {
     flag: "/std:c++23preview",
@@ -750,11 +794,7 @@ export const linkerFlags: Flag[] = [
     desc: "No PIE on FreeBSD (simpler codegen)",
   },
   {
-    flag: [
-      "-Wl,--as-needed",
-      "-Wl,-z,stack-size=12800000",
-      "-Wl,-O2",
-    ],
+    flag: ["-Wl,--as-needed", "-Wl,-z,stack-size=12800000", "-Wl,-O2"],
     when: c => c.freebsd,
     desc: "FreeBSD linker tuning: large stack",
   },
@@ -793,10 +833,7 @@ export const linkerFlags: Flag[] = [
     desc: "Dynamic symbol list + version script",
   },
   {
-    flag: c => [
-      "-rdynamic",
-      `-Wl,--dynamic-list=${c.cwd}/src/symbols.dyn`,
-    ],
+    flag: c => ["-rdynamic", `-Wl,--dynamic-list=${c.cwd}/src/symbols.dyn`],
     when: c => c.freebsd,
     desc: "Dynamic symbol list for FreeBSD (ELF, no version script needed)",
   },
