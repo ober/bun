@@ -449,8 +449,9 @@ export function registerDepRules(n: Ninja, cfg: Config): void {
   // FD 3; stream.ts writes prefixed lines to FD 3; output lands on the
   // terminal directly. Deps run 4-at-a-time, every line streams live.
   // FreeBSD: bun-linux can't spawn FreeBSD native cmake/cargo via stream.ts
-  // under Linuxulator. Skip the stream wrapper — run cmake directly.
-  const streamPrefix = cfg.freebsd ? "" : `${cfg.jsRuntime} ${q(streamPath)} $name `;
+  // under Linuxulator. For dep_configure/dep_build, skip stream.ts.
+  const stream = `${cfg.jsRuntime} ${q(streamPath)} $name`;
+  const streamPrefix = cfg.freebsd ? "" : `${stream} `;
 
   // Fetch: downloads github archive tarball, extracts, patches, writes .ref.
   // The command encodes: name, repo, commit, dest path, cache path, and patch
