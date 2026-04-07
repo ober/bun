@@ -10,6 +10,29 @@ import { execSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { arch as hostArch, platform as hostPlatform } from "node:os";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
+
+/**
+ * Detect the real host platform, handling Linuxulator (FreeBSD running
+ * Linux binaries). Under Linuxulator, process.platform reports "linux"
+ * but the actual OS is FreeBSD. Detect via /etc/os-release or uname -s.
+ */
+function detectRealPlatform(): string {
+  const plat = hostPlatform();
+  if (plat === "linux") {
+    // Check for FreeBSD Linuxulator
+    try {
+      if (existsSync("/etc/os-release")) {
+        const osRelease = readFileSync("/etc/os-release", "utf8");
+        if (/^ID=freebsd$/m.test(osRelease)) return "freebsd";
+      }
+      const uname = execSync("uname -s", { encoding: "utf8", timeout: 5000 }).trim();
+      if (uname === "FreeBSD") return "freebsd";
+    } catch {
+      // fall through — assume real Linux
+    }
+  }
+  return plat;
+}
 import { NODEJS_ABI_VERSION, NODEJS_VERSION } from "./deps/nodejs-headers.ts";
 import { WEBKIT_VERSION } from "./deps/webkit.ts";
 import { BuildError, assert } from "./error.ts";
@@ -286,7 +309,7 @@ export interface Toolchain {
  * Host platform detection. Only used for picking defaults.
  */
 export function detectHost(): Host {
-  const plat = hostPlatform();
+  const plat = detectRealPlatform();
   const os: OS =
     plat === "linux"
       ? "linux"
