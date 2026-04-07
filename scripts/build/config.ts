@@ -14,21 +14,16 @@ import { isAbsolute, join, relative, resolve, sep } from "node:path";
 /**
  * Detect the real host platform, handling Linuxulator (FreeBSD running
  * Linux binaries). Under Linuxulator, process.platform reports "linux"
- * but the actual OS is FreeBSD. Detect via /etc/os-release or uname -s.
+ * but the actual OS is FreeBSD. Detect via FreeBSD-specific files that
+ * are accessible from within the Linuxulator.
  */
 function detectRealPlatform(): string {
   const plat = hostPlatform();
   if (plat === "linux") {
-    // Check for FreeBSD Linuxulator
-    try {
-      if (existsSync("/etc/os-release")) {
-        const osRelease = readFileSync("/etc/os-release", "utf8");
-        if (/^ID=freebsd$/m.test(osRelease)) return "freebsd";
-      }
-      const uname = execSync("uname -s", { encoding: "utf8", timeout: 5000 }).trim();
-      if (uname === "FreeBSD") return "freebsd";
-    } catch {
-      // fall through — assume real Linux
+    // Check for FreeBSD Linuxulator — FreeBSD-specific files are visible
+    // from within the compat layer.
+    if (existsSync("/etc/freebsd-update.conf") || existsSync("/etc/rc.conf")) {
+      return "freebsd";
     }
   }
   return plat;
