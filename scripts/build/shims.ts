@@ -14,7 +14,7 @@ import { resolve } from "node:path";
 import type { Config } from "./config.ts";
 import type { Ninja } from "./ninja.ts";
 import { quote } from "./shell.ts";
-import { webkit } from "./deps/webkit.ts";
+import { prebuiltDestDir } from "./deps/webkit.ts";
 
 export interface ShimLinkOpts {
   /** Extra ldflags to append to the link() call. */
@@ -86,7 +86,7 @@ export function emitShims(n: Ninja, cfg: Config): ShimLinkOpts {
   // ─── FreeBSD: weaken WTFCrashWithInfoImpl + noop stub ───
   if (cfg.freebsd) {
     // 1. Weaken WTFCrashWithInfoImpl symbols in libWTF.a
-    const wtfLib = resolve(webkit.prebuiltDestDir(cfg), "lib", `${cfg.libPrefix}WTF${cfg.libSuffix}`);
+    const wtfLib = resolve(prebuiltDestDir(cfg), "lib", `${cfg.libPrefix}WTF${cfg.libSuffix}`);
     const stamp = resolve(cfg.buildDir, WTF_WEAKENED_STAMP);
 
     n.build({
