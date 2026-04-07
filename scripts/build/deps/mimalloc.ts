@@ -17,6 +17,11 @@ export const mimalloc: Dependency = {
     commit: MIMALLOC_COMMIT,
   }),
 
+  // FreeBSD aarch64 mmap returns addresses ~120 TiB which exceeds mimalloc's
+  // default 48 TiB segment map.  This patch bumps the limit to 256 TiB so
+  // mi_is_in_heap_region() correctly tracks huge allocations.
+  patches: ["patches/mimalloc/segment-map.c.patch"],
+
   build: cfg => {
     const args: Record<string, string> = {
       // Always build both the static lib AND the object-library target.

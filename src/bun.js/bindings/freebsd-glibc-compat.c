@@ -138,22 +138,29 @@ int prctl(int option, ...)
 
 /* --- syscall() interpose --- */
 /* The precompiled Linux WebKit/JSC library calls syscall() with Linux-specific
- * syscall numbers (e.g. 186 = gettid on Linux x86_64).  On FreeBSD, syscall 186
- * is the obsolete lfs_segclean stub which returns SIGSYS.
+ * syscall numbers. The Linux gettid syscall number differs by arch:
+ *   x86_64:  186
+ *   aarch64: 178
+ * FreeBSD doesn't have a gettid syscall — use thr_self() instead.
  *
  * We provide our own syscall() that:
- *   - Translates known Linux-only numbers to FreeBSD equivalents.
- *   - Passes everything else straight to the FreeBSD kernel via the indirect
- *     syscall mechanism (SYS_syscall = 0, first arg = actual number).
- *
- * The non-variadic 7-arg signature is ABI-compatible on x86-64: extra integer
- * args beyond what the caller passes are simply garbage in the corresponding
- * registers, which the kernel ignores for unneeded args.
+ *   - Translates known Linux-only numbers (gettid) to thr_self().
+ *   - Passes everything else straight through to FreeBSD's __sys_syscall.
  */
 #include <sys/thr.h>
 
-/* Linux x86_64 gettid = 186; FreeBSD uses thr_self(). */
+#if defined(__x86_64__)
 #define LINUX_SYS_gettid 186
+#elif defined(__aarch64__)
+#define LINUX_SYS_gettid 178
+#else
+#define LINUX_SYS_gettid (-1) /* unknown — pass through */
+#endif
+
+/* FreeBSD's internal syscall wrapper, available as a strong symbol in libc.
+ * Using it lets us avoid arch-specific inline assembly for the pass-through
+ * case and avoids recursive calls into our own syscall() override. */
+extern long __sys_syscall(long nr, ...);
 
 /* Rename our C function to the exported symbol "syscall" so the linker prefers
  * this strong static definition over the weak dynamic one in libsys.so.7. */
@@ -164,38 +171,12 @@ long bun_freebsd_syscall(long nr, long a1, long a2, long a3, long a4, long a5, l
 __attribute__((visibility("default")))
 long bun_freebsd_syscall(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
 {
-    (void)a6; /* 6th syscall arg goes on stack in old FreeBSD ABI; omit for now */
-
     if (nr == LINUX_SYS_gettid) {
         long tid = -1;
         thr_self(&tid);
         return tid;
     }
-
-    /*
-     * FreeBSD indirect syscall:
-     *   %rax = 0  (SYS_syscall = indirect dispatch)
-     *   %rdi = nr, %rsi = a1, %rdx = a2, %r10 = a3, %r8 = a4, %r9 = a5
-     * Carry flag set on error; %rax holds errno value in that case.
-     */
-    register long _r10 __asm__("r10") = a3;
-    register long _r8  __asm__("r8")  = a4;
-    register long _r9  __asm__("r9")  = a5;
-    long ret;
-    unsigned char carry;
-    __asm__ volatile (
-        "xorl %%eax, %%eax\n\t"   /* rax = 0 (SYS_syscall indirect) */
-        "syscall\n\t"
-        "setc %[c]\n\t"
-        : "=a"(ret), [c]"=q"(carry)
-        : "D"(nr), "S"(a1), "d"(a2), "r"(_r10), "r"(_r8), "r"(_r9)
-        : "rcx", "r11", "memory"
-    );
-    if (carry) {
-        errno = (int)ret;
-        return -1L;
-    }
-    return ret;
+    return __sys_syscall(nr, a1, a2, a3, a4, a5, a6);
 }
 
 /* --- sysinfo --- */
@@ -570,8 +551,12 @@ void *bun_freebsd_mmap(void *addr, size_t len, int prot, int flags, int fd, off_
  * which hides memory from core dumps rather than releasing pages. */
 
 #define LINUX_MADV_FREE     8
-#define LINUX_MADV_WIPEONFORK  18
-#define LINUX_MADV_KEEPONFORK  19
+#define LINUX_MADV_REMOVE        9
+#define LINUX_MADV_DONTFORK      11
+#define LINUX_MADV_DONTDUMP      16
+#define LINUX_MADV_DOFORK        17
+#define LINUX_MADV_WIPEONFORK    18
+#define LINUX_MADV_KEEPONFORK    19
 
 /* FreeBSD MADV_FREE is 5, same as POSIX */
 #ifndef MADV_FREE
@@ -586,25 +571,147 @@ __attribute__((visibility("default")))
 int bun_freebsd_madvise(void *addr, size_t len, int advice)
 {
     switch (advice) {
-    case LINUX_MADV_FREE:      advice = MADV_FREE;   break; /* 8 → 5 */
-    case LINUX_MADV_WIPEONFORK:  /* no FreeBSD equivalent */ return 0;
-    case LINUX_MADV_KEEPONFORK:  /* no FreeBSD equivalent */ return 0;
+    case LINUX_MADV_FREE:        advice = MADV_FREE;   break; /* 8 → 5 */
+    case LINUX_MADV_REMOVE:      return 0;  /* no FreeBSD equivalent */
+    case LINUX_MADV_DONTFORK:    return 0;  /* no FreeBSD equivalent */
+    case LINUX_MADV_DONTDUMP:    return 0;  /* no FreeBSD equivalent */
+    case LINUX_MADV_DOFORK:      return 0;  /* no-op */
+    case LINUX_MADV_WIPEONFORK:  return 0;  /* no FreeBSD equivalent */
+    case LINUX_MADV_KEEPONFORK:  return 0;  /* no FreeBSD equivalent */
     /* MADV_NORMAL(0), MADV_RANDOM(1), MADV_SEQUENTIAL(2), MADV_WILLNEED(3),
      * MADV_DONTNEED(4) are identical between Linux and FreeBSD. */
     }
     return __sys_madvise(addr, len, advice);
 }
 
+/* --- clock_gettime Linux→FreeBSD clock ID translation --- */
+/* Some clock IDs differ between Linux and FreeBSD:
+ *   Linux CLOCK_MONOTONIC_COARSE = 6  → FreeBSD CLOCK_MONOTONIC_FAST = 12
+ *   Linux CLOCK_REALTIME_COARSE  = 7  → FreeBSD CLOCK_UPTIME_PRECISE = 7
+ *     (different semantics; we map to CLOCK_REALTIME_FAST = 10)
+ *   Linux CLOCK_BOOTTIME         = 7  → FreeBSD CLOCK_UPTIME = 5
+ *
+ * WebKit/libpas calls clock_gettime(CLOCK_MONOTONIC_COARSE) which on Linux is
+ * 6.  FreeBSD has no clock ID 6 → EINVAL → assertions fire in libpas.
+ *
+ * Note: Linux CLOCK_MONOTONIC = 1 collides with FreeBSD CLOCK_VIRTUAL = 1.
+ * However, WebKit was compiled against glibc headers and Linux numbering, so
+ * any reference to "CLOCK_MONOTONIC" in the precompiled .a uses 1.  We
+ * translate that to FreeBSD CLOCK_MONOTONIC = 4. */
+#include <time.h>
+extern int __sys_clock_gettime(clockid_t, struct timespec *);
+
+__attribute__((visibility("default")))
+int bun_freebsd_clock_gettime(clockid_t clk_id, struct timespec *tp)
+    __asm__("clock_gettime");
+
+__attribute__((visibility("default")))
+int bun_freebsd_clock_gettime(clockid_t clk_id, struct timespec *tp)
+{
+    switch ((int)clk_id) {
+    case 1:  /* Linux CLOCK_MONOTONIC = FreeBSD CLOCK_VIRTUAL */
+        clk_id = CLOCK_MONOTONIC; /* = 4 on FreeBSD */
+        break;
+    case 6:  /* Linux CLOCK_MONOTONIC_COARSE */
+        clk_id = CLOCK_MONOTONIC_FAST; /* = 12 on FreeBSD */
+        break;
+    /* Leave 7 alone: FreeBSD's CLOCK_UPTIME_PRECISE works as a monotonic
+     * clock and is more precise than CLOCK_BOOTTIME. */
+    default:
+        break;
+    }
+    return __sys_clock_gettime(clk_id, tp);
+}
+
+/* --- sigaction Linux→FreeBSD struct layout translation --- */
+/* The precompiled Linux WTF library calls plain sigaction() with a Linux
+ * struct sigaction layout.  Translate the same way as __interceptor_sigaction.
+ *
+ * Linux struct:
+ *   offset   0: sa_handler/sa_sigaction (8 bytes)
+ *   offset   8: sa_mask (sigset_t, 128 bytes)
+ *   offset 136: sa_flags (int)
+ *   offset 140: sa_restorer (pointer)
+ * FreeBSD struct:
+ *   offset   0: sa_handler/sa_sigaction (8 bytes)
+ *   offset   8: sa_flags (int)
+ *   offset  12: padding
+ *   offset  16: sa_mask (sigset_t, 16 bytes)
+ *
+ * Detection: if int at offset 8 has bits above 0xFF set, the caller is using
+ * Linux layout (because their sa_mask bytes leak into our sa_flags slot).
+ * Native FreeBSD callers always have valid sa_flags ≤ 0xFF.
+ *
+ * NOTE: __interceptor_sigaction (above) does the same thing — sanitizer-
+ * instrumented code calls __interceptor_sigaction; non-instrumented code
+ * calls sigaction directly.  Our build strips sanitizers, so we need both. */
+__attribute__((visibility("default")))
+int bun_sigaction_interpose(int signo, const struct sigaction *act, struct sigaction *oldact)
+    __asm__("sigaction");
+
+__attribute__((visibility("default")))
+int bun_sigaction_interpose(int signo, const struct sigaction *act, struct sigaction *oldact)
+{
+    if (!act)
+        return __sys_sigaction(signo, act, oldact);
+
+    {
+        int probe;
+        __builtin_memcpy(&probe, (const unsigned char*)act + 8, sizeof(probe));
+        if (!(probe & ~0xFF))
+            return __sys_sigaction(signo, act, oldact); /* already FreeBSD layout */
+    }
+
+    const unsigned char *in = (const unsigned char*)act;
+    int linux_flags;
+    __builtin_memcpy(&linux_flags, in + 136, sizeof(linux_flags));
+
+    int freebsd_flags = 0;
+    if (linux_flags & L_SA_SIGINFO)    freebsd_flags |= F_SA_SIGINFO;
+    if (linux_flags & L_SA_ONSTACK)    freebsd_flags |= F_SA_ONSTACK;
+    if (linux_flags & L_SA_RESTART)    freebsd_flags |= F_SA_RESTART;
+    if (linux_flags & L_SA_NODEFER)    freebsd_flags |= F_SA_NODEFER;
+    if (linux_flags & L_SA_RESETHAND)  freebsd_flags |= F_SA_RESETHAND;
+    if (linux_flags & L_SA_NOCLDSTOP)  freebsd_flags |= F_SA_NOCLDSTOP;
+
+    struct sigaction native_sa;
+    __builtin_memset(&native_sa, 0, sizeof(native_sa));
+    __builtin_memcpy(&native_sa, in, sizeof(void*));
+    native_sa.sa_flags = freebsd_flags;
+    __builtin_memcpy(&native_sa.sa_mask, in + 8, sizeof(native_sa.sa_mask));
+
+    return __sys_sigaction(signo, &native_sa, oldact);
+}
+
+/* --- getauxval --- */
+/* Linux-only auxiliary vector accessor.  Some glibc-compiled code references
+ * it (notably libgcc/libstdc++).  Return 0 — caller should treat as "not
+ * present" and fall back to other mechanisms. */
+__attribute__((visibility("default")))
+unsigned long getauxval(unsigned long type)
+{
+    (void)type;
+    return 0;
+}
+
 /* --- __timezone --- */
-/* glibc exports timezone as __timezone. FreeBSD has 'timezone' (no underscore).
- * Precompiled objects may reference __timezone; provide a copy updated at startup. */
-extern long timezone; /* FreeBSD libc already defines this (from tzset) */
+/* glibc exports timezone as __timezone (a `long`).
+ * On FreeBSD x86_64, libc has `extern long timezone` from tzset().
+ * On FreeBSD aarch64, <time.h> declares `char *timezone(int, int)` (an XSI
+ * legacy function), which collides with `extern long timezone`.
+ *
+ * Use localtime_r() + tm_gmtoff to compute the offset portably. */
 long bun_timezone_compat __asm__("__timezone");
 
 __attribute__((constructor(102))) static void init_bun_timezone_compat(void)
 {
-    tzset(); /* ensure timezone is populated */
-    bun_timezone_compat = timezone;
+    tzset();
+    time_t t = 0;
+    struct tm lt;
+    localtime_r(&t, &lt);
+    /* glibc convention: __timezone is seconds WEST of UTC.
+     * tm_gmtoff is seconds EAST of UTC, so negate. */
+    bun_timezone_compat = -(long)lt.tm_gmtoff;
 }
 
 #endif /* defined(__FreeBSD__) */

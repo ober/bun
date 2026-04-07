@@ -35,9 +35,9 @@ for (let fileIndex = 0; fileIndex < allFiles.length; fileIndex++) {
     Bun.$`bun build --define=process.env.NODE_DEBUG:"false" --define=process.env.READABLE_STREAM="'enable'" --define=global:globalThis --outdir=${outdir} ${name} --minify-syntax --minify-whitespace --format=${name.includes("stream") ? "cjs" : "esm"} --target=node ${{ raw: externalModules }}`.text();
 
   commands.push(
-    buildCommand.then(async text => {
+    buildCommand.then(_text => {
       // This is very brittle. But that should be okay for our usecase
-      let outfile = (await Bun.file(`${outdir}/${name}`).text())
+      let outfile = fs.readFileSync(`${outdir}/${name}`, "utf8")
         .replaceAll("__require(", "require(")
         .replaceAll("import.meta.url", "''")
         .replaceAll("createRequire", "")
@@ -73,7 +73,7 @@ for (let fileIndex = 0; fileIndex < allFiles.length; fileIndex++) {
         throw new Error("Unsupported function in " + name);
       }
 
-      await Bun.write(`${outdir}/${name}`, outfile);
+      fs.writeFileSync(`${outdir}/${name}`, outfile);
     }),
   );
 }

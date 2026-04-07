@@ -9,7 +9,6 @@
 // supported macros that aren't json value -> json value. Otherwise, I'd use a real JS parser/ast
 // library, instead of RegExp hacks.
 import fs from "fs";
-import { mkdir, writeFile } from "fs/promises";
 import { builtinModules } from "node:module";
 import path from "path";
 import { spawnSync as _nodeSpawnSync } from "child_process";
@@ -165,31 +164,12 @@ ${processed.result.slice(1).trim()}
     }
     const outputPath = path.join(TMP_DIR, moduleList[i].slice(0, -3) + ".ts");
 
-    await mkdir(path.dirname(outputPath), { recursive: true });
-    if (!fs.existsSync(path.dirname(outputPath))) {
-      verbose("directory did not exist after mkdir twice:", path.dirname(outputPath));
-    }
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
     fileToTranspile = "// @ts-nocheck\n" + fileToTranspile;
 
-    try {
-      await writeFile(outputPath, fileToTranspile);
-      if (!fs.existsSync(outputPath)) {
-        verbose("file did not exist after write:", outputPath);
-        throw new Error("file did not exist after write: " + outputPath);
-      }
-      verbose("wrote to", outputPath, "successfully");
-    } catch {
-      await retry(3, async () => {
-        await mkdir(path.dirname(outputPath), { recursive: true });
-        await writeFile(outputPath, fileToTranspile);
-        if (!fs.existsSync(outputPath)) {
-          verbose("file did not exist after write:", outputPath);
-          throw new Error("file did not exist after write: " + outputPath);
-        }
-        verbose("wrote to", outputPath, "successfully later");
-      });
-    }
+    fs.writeFileSync(outputPath, fileToTranspile);
+    verbose("wrote to", outputPath, "successfully");
     bundledEntryPoints.push(outputPath);
   } catch (error) {
     console.error(error);
@@ -240,8 +220,7 @@ const outputs = new Map();
 
 for (const entrypoint of bundledEntryPoints) {
   const file_path = entrypoint.slice(TMP_DIR.length + 1).replace(/\.ts$/, ".js");
-  const file = Bun.file(path.join(TMP_DIR, "modules_out", file_path));
-  const output = await file.text();
+  const output = fs.readFileSync(path.join(TMP_DIR, "modules_out", file_path), "utf8");
   let captured = `(function (){${output.replace("// @bun\n", "").trim()}})`;
   let usesDebug = output.includes("$debug_log");
   let usesAssert = output.includes("$assert");
@@ -543,25 +522,25 @@ declare module "module" {
 
 mark("Generate Code");
 
-const evalFiles = new Bun.Glob(path.join(BASE, "eval", "*.ts")).scanSync();
+const evalFiles = [...new Bun.Glob(path.join(BASE, "eval", "*.ts")).scanSync()];
 for (const file of evalFiles) {
-  const {
-    outputs: [output],
-  } = await Bun.build({
-    entrypoints: [file],
-
-    // Shrink it.
-    minify: !debug,
-
-    target: "bun",
-    format: "esm",
-    env: "disable",
-    define: {
-      "process.platform": JSON.stringify(process.platform),
-      "process.arch": JSON.stringify(process.arch),
-    },
-  });
-  writeIfNotChanged(path.join(CODEGEN_DIR, "eval", path.basename(file)), await output.text());
+  const tmpOutFile = file + ".eval.out.js";
+  const evalDefineArgs = [
+    `--define:process.platform=${JSON.stringify(process.platform)}`,
+    `--define:process.arch=${JSON.stringify(process.arch)}`,
+  ];
+  const evalBuildResult = _nodeSpawnSync(
+    process.execPath,
+    ["build", file, "--outfile", tmpOutFile, "--target=bun", "--format=esm", ...(!debug ? ["--minify"] : []), ...evalDefineArgs],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  if (evalBuildResult.status !== 0) {
+    const stderr = evalBuildResult.stderr ? evalBuildResult.stderr.toString("utf8") : "";
+    throw new Error("Failed to bundle eval file " + file + ":\n" + stderr);
+  }
+  const evalOutput = fs.readFileSync(tmpOutFile, "utf8");
+  fs.rmSync(tmpOutFile);
+  writeIfNotChanged(path.join(CODEGEN_DIR, "eval", path.basename(file)), evalOutput);
 }
 
 if (!silent) {

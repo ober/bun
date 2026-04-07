@@ -17,7 +17,8 @@
 // single JSC::SourceProvider and pass start/end positions to each function's
 // JSC::SourceCode. JSC does this, but WebCore does not seem to.
 import assert from "assert";
-import { readdirSync, rmSync } from "fs";
+import { spawnSync } from "child_process";
+import fs, { readdirSync, rmSync } from "fs";
 import path from "path";
 import { sliceSourceCode } from "./builtin-parser";
 import { createAssertClientJS, createLogClientJS } from "./client-js";
@@ -70,7 +71,7 @@ interface BundledBuiltin {
  */
 async function processFileSplit(filename: string): Promise<{ functions: BundledBuiltin[]; internal: boolean }> {
   const basename = path.basename(filename, ".ts");
-  let contents = await Bun.file(filename).text();
+  let contents = fs.readFileSync(filename, "utf8");
 
   contents = applyGlobalReplacements(contents);
   const originalContents = contents;
@@ -267,7 +268,8 @@ async function processFileSplit(filename: string): Promise<{ functions: BundledB
     const useThis = true;
 
     // TODO: we should use format=IIFE so we could bundle imports and extra functions.
-    await Bun.write(
+    fs.mkdirSync(path.dirname(tmpFile), { recursive: true });
+    fs.writeFileSync(
       tmpFile,
       `// @ts-nocheck
 // GENERATED TEMP FILE - DO NOT EDIT
@@ -283,21 +285,22 @@ $$capture_start$$(${fn.async ? "async " : ""}${
       } {${fn.source}}).$$capture_end$$;
 `,
     );
-    await Bun.sleep(1);
-    const build = await Bun.build({
-      entrypoints: [tmpFile],
-      define,
-      target: "bun",
-      minify: { syntax: true, whitespace: false, keepNames: true },
-    });
-    // TODO: Wait a few versions before removing this
-    if (!build.success) {
-      throw new AggregateError(build.logs, "Failed bundling builtin function " + fn.name + " from " + basename + ".ts");
+    const tmpOutFile = tmpFile + ".out.js";
+    const defineArgs = Object.entries(define).flatMap(([k, v]) => [`--define:${k}=${v}`]);
+    const buildResult = spawnSync(
+      process.execPath,
+      ["build", tmpFile, "--outfile", tmpOutFile, "--target=bun", "--minify-syntax", "--no-minify-whitespace", "--keep-names", ...defineArgs],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    if (buildResult.status !== 0) {
+      const stderr = buildResult.stderr ? buildResult.stderr.toString("utf8") : "";
+      throw new AggregateError([stderr], "Failed bundling builtin function " + fn.name + " from " + basename + ".ts");
     }
-    if (build.outputs.length !== 1) {
-      throw new Error("expected one output");
+    if (!fs.existsSync(tmpOutFile)) {
+      throw new Error("expected output file to exist: " + tmpOutFile);
     }
-    let output = (await build.outputs[0].text()).replaceAll("// @bun\n", "");
+    let output = fs.readFileSync(tmpOutFile, "utf8").replaceAll("// @bun\n", "");
+    fs.rmSync(tmpOutFile);
     let usesDebug = output.includes("$debug_log");
     let usesAssert = output.includes("$assert");
     const captured = output.match(/\$\$capture_start\$\$([\s\S]+)\.\$\$capture_end\$\$/)![1];

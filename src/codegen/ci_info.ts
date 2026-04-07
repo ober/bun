@@ -447,7 +447,7 @@ if (import.meta.main) {
   const args = process.argv.slice(2);
   const out = args[0];
   if (out) {
-    await Bun.write(out, result);
+    require("fs").writeFileSync(out, result);
   } else {
     console.log(result);
   }

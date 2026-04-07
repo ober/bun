@@ -104,6 +104,9 @@ const patterns = {
       "packages/bun-usockets/src/crypto/*.c",
       "src/bun.js/bindings/uv-posix-polyfills.c",
       "src/bun.js/bindings/uv-posix-stubs.c",
+      // FreeBSD glibc compatibility shims (entire body guarded by
+      // #if defined(__FreeBSD__), so it's a no-op TU on Linux/macOS).
+      "src/bun.js/bindings/freebsd-glibc-compat.c",
       "src/*.c",
       "src/bun.js/bindings/node/http/llhttp/*.c",
     ],

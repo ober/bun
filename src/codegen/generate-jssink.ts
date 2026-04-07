@@ -1,3 +1,4 @@
+import fs from "fs";
 import { join, resolve } from "path";
 import { spawnSync as _nodeSpawnSync } from "child_process";
 
@@ -1050,9 +1051,9 @@ function lutInput() {
 
 const outDir = resolve(process.argv[2]);
 
-await Bun.write(resolve(outDir + "/JSSink.h"), header());
-await Bun.write(resolve(outDir + "/JSSink.cpp"), await implementation());
-await Bun.write(resolve(outDir + "/JSSink.lut.txt"), lutInput());
+fs.writeFileSync(resolve(outDir + "/JSSink.h"), header());
+fs.writeFileSync(resolve(outDir + "/JSSink.cpp"), await implementation());
+fs.writeFileSync(resolve(outDir + "/JSSink.lut.txt"), lutInput());
 
 // Use child_process.spawnSync for FreeBSD compat
 _nodeSpawnSync(

@@ -1,0 +1,15 @@
+--- src/segment-map.c
++++ src/segment-map.c
+@@ -19,6 +19,12 @@
+ // Reduce total address space to reduce .bss  (due to the `mi_segment_map`)
+ #if (MI_INTPTR_SIZE > 4) && MI_TRACK_ASAN
+ #define MI_SEGMENT_MAP_MAX_ADDRESS    (128*1024ULL*MI_GiB)  // 128 TiB  (see issue #881)
++#elif (MI_INTPTR_SIZE > 4) && defined(__FreeBSD__)
++/* FreeBSD's mmap returns addresses up to ~120 TiB on aarch64 (and similarly
++ * high addresses on amd64).  Bump the segment map to 256 TiB so
++ * mi_is_in_heap_region() correctly identifies huge allocations and Bun's
++ * debug assertion in src/allocators/MimallocArena.zig:216 doesn't fire. */
++#define MI_SEGMENT_MAP_MAX_ADDRESS    (256*1024ULL*MI_GiB)  // 256 TiB
+ #elif (MI_INTPTR_SIZE > 4)
+ #define MI_SEGMENT_MAP_MAX_ADDRESS    (48*1024ULL*MI_GiB)   // 48 TiB
+ #else
