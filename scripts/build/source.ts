@@ -448,7 +448,9 @@ export function registerDepRules(n: Ninja, cfg: Config): void {
   // through posix_spawn/CreateProcessA unchanged. build.ts dups stderr into
   // FD 3; stream.ts writes prefixed lines to FD 3; output lands on the
   // terminal directly. Deps run 4-at-a-time, every line streams live.
-  const stream = `${cfg.jsRuntime} ${q(streamPath)} $name`;
+  // FreeBSD: bun-linux can't spawn FreeBSD native cmake/cargo via stream.ts
+  // under Linuxulator. Skip the stream wrapper — run cmake directly.
+  const streamPrefix = cfg.freebsd ? "" : `${cfg.jsRuntime} ${q(streamPath)} $name `;
 
   // Fetch: downloads github archive tarball, extracts, patches, writes .ref.
   // The command encodes: name, repo, commit, dest path, cache path, and patch
@@ -485,7 +487,9 @@ export function registerDepRules(n: Ninja, cfg: Config): void {
   // only reruns this rule when $args actually changed (tracked in .ninja_log),
   // we always want a clean slate when it does run.
   n.rule("dep_configure", {
-    command: `${stream} --cwd=$srcdir ${cmake} --fresh -B$builddir $args`,
+    command: cfg.freebsd
+      ? `cd $srcdir && ${cmake} --fresh -B$builddir $args`
+      : `${streamPrefix}--cwd=$srcdir ${cmake} --fresh -B$builddir $args`,
     description: "cmake $name",
     restat: true,
     pool: "dep",
@@ -495,7 +499,9 @@ export function registerDepRules(n: Ninja, cfg: Config): void {
   // the dep, cmake --build is a no-op (inner ninja re-stats), and our restat
   // prunes everything downstream.
   n.rule("dep_build", {
-    command: `${stream} ${cmake} --build $builddir --config $buildtype $targets`,
+    command: cfg.freebsd
+      ? `${cmake} --build $builddir --config $buildtype $targets`
+      : `${streamPrefix}${cmake} --build $builddir --config $buildtype $targets`,
     description: "build $name",
     restat: true,
     pool: "dep",
@@ -509,7 +515,9 @@ export function registerDepRules(n: Ninja, cfg: Config): void {
   // restat: cargo's incremental build doesn't touch unchanged outputs.
   if (cfg.cargo !== undefined) {
     n.rule("dep_cargo", {
-      command: `${stream} --cwd=$manifestdir $env ${q(cfg.cargo)} build $args`,
+      command: cfg.freebsd
+        ? `cd $manifestdir && $env ${q(cfg.cargo)} build $args`
+        : `${streamPrefix}--cwd=$manifestdir $env ${q(cfg.cargo)} build $args`,
       description: "cargo $name",
       restat: true,
       pool: "dep",
