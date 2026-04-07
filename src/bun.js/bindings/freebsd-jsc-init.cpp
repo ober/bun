@@ -1,21 +1,20 @@
 /* FreeBSD: wrapper for WTF::initializeMainThread().
  *
  * ZigGlobalObject.cpp calls Bun_initializeMainThread_freebsd() instead of
- * WTF::initializeMainThread() directly on FreeBSD.
+ * WTF::initializeMainThread() directly on FreeBSD.  This TU exists so that
+ * the precompiled WebKit's inlined verifyCanGC calls from JSCInitialize
+ * stay contained — they don't bleed into ZigGlobalObject.cpp's call graph.
  *
- * Compiled with -fno-exceptions (like the rest of Bun), so no try/catch here.
+ * Compiled with -fno-exceptions (like the rest of Bun).  The compat shims
+ * in freebsd-glibc-compat.c (pthread_once CAS, sched_setscheduler noop,
+ * sigaction translation) prevent the C++ exceptions that would otherwise
+ * fire during WTF initialization.
  */
-
-#include <stdio.h>
-#include <execinfo.h>
-#include <exception>
 
 /* Forward-declare to avoid pulling in bmalloc / WTF headers. */
 namespace WTF { void initializeMainThread(); }
 
 extern "C" void Bun_initializeMainThread_freebsd()
 {
-    fprintf(stderr, "[FreeBSD-JSC] calling WTF::initializeMainThread\n"); fflush(stderr);
     WTF::initializeMainThread();
-    fprintf(stderr, "[FreeBSD-JSC] WTF::initializeMainThread returned\n"); fflush(stderr);
 }

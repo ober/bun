@@ -107,6 +107,8 @@ const patterns = {
       // FreeBSD glibc compatibility shims (entire body guarded by
       // #if defined(__FreeBSD__), so it's a no-op TU on Linux/macOS).
       "src/bun.js/bindings/freebsd-glibc-compat.c",
+      // FreeBSD: noop stub for WTFCrashWithInfoImpl (see file for details).
+      "src/bun.js/bindings/wtf-crash-stub.c",
       "src/*.c",
       "src/bun.js/bindings/node/http/llhttp/*.c",
     ],

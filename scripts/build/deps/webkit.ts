@@ -73,11 +73,9 @@ function prebuiltUrl(cfg: Config): string {
   return `https://github.com/oven-sh/WebKit/releases/download/${tag}/${name}.tar.gz`;
 }
 
-/**
- * Prebuilt extraction dir. Suffix in the key so switching debug ↔ release
- * doesn't reuse a wrong-ABI extraction.
- */
-function prebuiltDestDir(cfg: Config): string {
+/** Prebuilt extraction dir. Suffix in the key so switching debug ↔ release
+ * doesn't reuse a wrong-ABI extraction. Exported for shims.ts. */
+export function prebuiltDestDir(cfg: Config): string {
   const version16 = cfg.webkitVersion.slice(0, 16);
   return resolve(cfg.cacheDir, `webkit-${version16}${prebuiltSuffix(cfg)}`);
 }
@@ -112,10 +110,13 @@ function prebuiltIcuLibs(cfg: Config): string[] {
     const d = cfg.debug ? "d" : "";
     return [`lib/sicudt${d}.lib`, `lib/sicuin${d}.lib`, `lib/sicuuc${d}.lib`];
   }
-  if (cfg.linux || cfg.freebsd) {
+  if (cfg.linux) {
     return ["lib/libicudata.a", "lib/libicui18n.a", "lib/libicuuc.a"];
   }
-  return []; // darwin: system ICU
+  // darwin: system ICU. freebsd: system ICU (bundled libs are glibc-built
+  // and incompatible with FreeBSD's libc/pthread; see bun.ts where we add
+  // `-licudata -licui18n -licuuc` unconditionally on FreeBSD).
+  return [];
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -161,8 +162,10 @@ export const webkit: Dependency = {
         identity: `${cfg.webkitVersion}${prebuiltSuffix(cfg)}`,
         destDir: prebuiltDestDir(cfg),
       };
-      // macOS: bundled ICU headers conflict with system ICU.
-      if (cfg.darwin) {
+      // macOS + FreeBSD: bundled ICU headers conflict with system ICU.
+      // (FreeBSD ships ICU 76 in /usr/local/include/unicode; the prebuilt
+      // bundles whatever ICU it was built against.)
+      if (cfg.darwin || cfg.freebsd) {
         src.rmAfterExtract = ["include/unicode"];
       }
       return src;
@@ -206,6 +209,10 @@ export const webkit: Dependency = {
       ENABLE_MEDIA_SOURCE: "OFF",
       ENABLE_MEDIA_STREAM: "OFF",
       ENABLE_WEB_RTC: "OFF",
+      // FreeBSD: disable DFG does-GC validation so verifyCanGC is not inlined
+      // into JSC functions.  The prebuilt Linux debug WebKit has this enabled,
+      // and the inlined copies can't be overridden via symbol interposition.
+      ...(cfg.freebsd ? { ENABLE_DFG_DOES_GC_VALIDATION: "OFF" } : {}),
       ...(cfg.asan ? { ENABLE_SANITIZERS: "address" } : {}),
     };
 
@@ -261,9 +268,9 @@ export const webkit: Dependency = {
       const libs = [...coreLibs(cfg), ...prebuiltIcuLibs(cfg), bmallocLib(cfg)];
 
       const includes = ["include"];
-      // Linux/windows: ICU headers under wtf/unicode. macOS: deleted by
-      // postExtract.
-      if (!cfg.darwin) includes.push("include/wtf/unicode");
+      // Linux/windows: ICU headers under wtf/unicode. macOS + FreeBSD: those
+      // are deleted by rmAfterExtract — system ICU is on the include path.
+      if (!cfg.darwin && !cfg.freebsd) includes.push("include/wtf/unicode");
 
       return { libs, includes };
     }

@@ -11,9 +11,26 @@
  * that apply uniformly to bun's own C/C++ sources.
  */
 
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { bunExeName, type Config } from "./config.ts";
 import { slash } from "./shell.ts";
+
+// FreeBSD: locate GCC 13's libstdc++ multiarch include dir at configure time.
+// The directory name encodes both arch (aarch64/x86_64) AND FreeBSD version
+// (14.3, 14.4, 15.0, ...) so it can't be hardcoded — find whatever's there
+// matching `<arch>-portbld-freebsd<ver>`.
+function freebsdGcc13MultiarchDir(arch: "aarch64" | "x86_64"): string | undefined {
+  const base = "/usr/local/lib/gcc13/include/c++";
+  if (!existsSync(base)) return undefined;
+  try {
+    const entries = readdirSync(base);
+    const match = entries.find(e => e.startsWith(`${arch}-portbld-freebsd`));
+    return match ? `${base}/${match}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export type FlagValue = string | string[] | ((cfg: Config) => string | string[]);
 
@@ -283,6 +300,16 @@ export const globalFlags: Flag[] = [
     desc: "Assume no symbol interposition (enables more inlining across TUs)",
   },
 
+  // ─── FreeBSD system include path ───
+  // FreeBSD's clang doesn't put /usr/local/include on the default search list
+  // (only /usr/include). System ICU 76 lives at /usr/local/include/unicode/,
+  // so explicitly add it. Also lets dependencies find e.g. <execinfo.h>.
+  {
+    flag: "-isystem/usr/local/include",
+    when: c => c.freebsd,
+    desc: "FreeBSD ports/pkg system headers (ICU 76, libexecinfo, ...)",
+  },
+
   // ─── Hardening (assertions builds) ───
   {
     flag: "-fno-delete-null-pointer-checks",
@@ -376,25 +403,31 @@ export const bunOnlyFlags: Flag[] = [
   // _GLIBCXX_NOTHROW is GCC's alias for noexcept; its empty string suppresses
   // throw()-qualified re-declarations in <cstdlib>.
   {
-    flag: [
-      "-nostdinc++",
-      "-isystem/usr/local/lib/gcc13/include/c++",
-      "-isystem/usr/local/lib/gcc13/include/c++/x86_64-portbld-freebsd15.0",
-      "-isystem/usr/local/lib/gcc13/include/c++/backward",
-      // Bypass GCC 13's os_defines.h (which unconditionally sets CHECK=1/DYNAMIC=expr)
-      // and provide our own values that avoid throw() conflicts with FreeBSD headers.
-      "-D_GLIBCXX_OS_DEFINES",
-      "-D_GLIBCXX_USE_C99_STDIO=1",
-      "-D_GLIBCXX_USE_C99_STDLIB=1",
-      "-D_GLIBCXX_USE_C99_WCHAR=1",
-      "-D_GLIBCXX_USE_C99_CHECK=0",
-      "-D_GLIBCXX_USE_C99_DYNAMIC=0",
-      "-D_GLIBCXX_USE_C99_LONG_LONG_CHECK=0",
-      "-D_GLIBCXX_USE_C99_LONG_LONG_DYNAMIC=0",
-      "-D_GLIBCXX_USE_C99_FLOAT_TRANSCENDENTALS_CHECK=0",
-      "-D_GLIBCXX_USE_C99_FLOAT_TRANSCENDENTALS_DYNAMIC=0",
-      "-D_GLIBCXX_NOTHROW=",
-    ],
+    flag: c => {
+      const arch = c.arm64 ? "aarch64" : "x86_64";
+      const multi = freebsdGcc13MultiarchDir(arch);
+      return [
+        "-nostdinc++",
+        "-isystem/usr/local/lib/gcc13/include/c++",
+        // Multiarch dir name varies by FreeBSD version — detect at configure time.
+        // If absent, omit (clang would error on a missing -isystem path).
+        ...(multi ? [`-isystem${multi}`] : []),
+        "-isystem/usr/local/lib/gcc13/include/c++/backward",
+        // Bypass GCC 13's os_defines.h (which unconditionally sets CHECK=1/DYNAMIC=expr)
+        // and provide our own values that avoid throw() conflicts with FreeBSD headers.
+        "-D_GLIBCXX_OS_DEFINES",
+        "-D_GLIBCXX_USE_C99_STDIO=1",
+        "-D_GLIBCXX_USE_C99_STDLIB=1",
+        "-D_GLIBCXX_USE_C99_WCHAR=1",
+        "-D_GLIBCXX_USE_C99_CHECK=0",
+        "-D_GLIBCXX_USE_C99_DYNAMIC=0",
+        "-D_GLIBCXX_USE_C99_LONG_LONG_CHECK=0",
+        "-D_GLIBCXX_USE_C99_LONG_LONG_DYNAMIC=0",
+        "-D_GLIBCXX_USE_C99_FLOAT_TRANSCENDENTALS_CHECK=0",
+        "-D_GLIBCXX_USE_C99_FLOAT_TRANSCENDENTALS_DYNAMIC=0",
+        "-D_GLIBCXX_NOTHROW=",
+      ];
+    },
     when: c => c.freebsd,
     lang: "cxx",
     desc: "GCC 13 libstdc++ headers via -nostdinc++ (ABI compatibility with Linux WebKit prebuilt)",
@@ -427,6 +460,10 @@ export const bunOnlyFlags: Flag[] = [
   // UBSan is bun-only because it's stricter and vendored code often violates it.
   // Enabled: debug builds (non-musl — musl's implementation hits false positives),
   // and release-asan builds (if you're debugging memory you want UBSan too).
+  // Skipped on FreeBSD: bun is linked against the precompiled Linux WebKit
+  // (built without these checks); UBSan-instrumented bun code mixed with
+  // un-instrumented WebKit triggers false positives and the runtime fights
+  // FreeBSD's pthread/__cxa internals.
   {
     flag: [
       "-fsanitize=null",
@@ -439,7 +476,7 @@ export const bunOnlyFlags: Flag[] = [
       "-fsanitize=returns-nonnull-attribute",
       "-fsanitize=unreachable",
     ],
-    when: c => c.unix && ((c.debug && c.abi !== "musl") || (c.release && c.asan)),
+    when: c => c.unix && !c.freebsd && ((c.debug && c.abi !== "musl") || (c.release && c.asan)),
     desc: "Undefined-behavior sanitizers",
   },
   {
@@ -622,12 +659,12 @@ export const linkerFlags: Flag[] = [
   },
   {
     flag: "-fsanitize=null",
-    when: c => c.unix && c.debug && c.abi !== "musl",
+    when: c => c.unix && !c.freebsd && c.debug && c.abi !== "musl",
     desc: "Link UBSan runtime",
   },
   {
     flag: "-fsanitize=null",
-    when: c => c.unix && c.release && c.asan,
+    when: c => c.unix && !c.freebsd && c.release && c.asan,
     desc: "Link UBSan runtime (release-asan)",
   },
   {
@@ -807,6 +844,13 @@ export const linkerFlags: Flag[] = [
     flag: ["-lutil", "-lexecinfo"],
     when: c => c.freebsd,
     desc: "FreeBSD system libraries (openpty in libutil, backtrace in libexecinfo)",
+  },
+  {
+    // System ICU (libicuuc, libicui18n, libicudata) installs into /usr/local/lib
+    // on FreeBSD. The bundled Linux ICU prebuilt is glibc-built and unusable.
+    flag: "-L/usr/local/lib",
+    when: c => c.freebsd,
+    desc: "FreeBSD ports/pkg lib search path (system ICU, libexecinfo)",
   },
 
   // ─── Symbols / exports ───

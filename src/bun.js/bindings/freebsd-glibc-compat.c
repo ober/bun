@@ -331,13 +331,7 @@ int bun_pthread_once_compat(pthread_once_t* once_control, void (*init_routine)(v
     if (__atomic_compare_exchange_n(state, &expected, 1 /* PTHREAD_IN_PROGRESS */,
                                     0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
         /* We won the CAS – run the initialiser. */
-        fprintf(stderr, "[ONCE] init_routine=%p once_control=%p state=IN_PROGRESS\n",
-                (void*)(uintptr_t)init_routine, (void*)once_control);
-        fflush(stderr);
         init_routine();
-        fprintf(stderr, "[ONCE] init_routine=%p returned normally\n",
-                (void*)(uintptr_t)init_routine);
-        fflush(stderr);
         __atomic_store_n(state, 2, __ATOMIC_RELEASE); /* PTHREAD_DONE_INIT */
         return 0;
     }
@@ -401,66 +395,14 @@ int bun_sched_getscheduler_stub(pid_t pid)
 #include <signal.h>
 extern int __sys_sigaction(int, const struct sigaction *, struct sigaction *);
 
-__attribute__((visibility("default")))
-int bun_interceptor_sigaction(int signo, const struct sigaction *act, struct sigaction *oldact)
-    __asm__("__interceptor_sigaction");
-
-int bun_interceptor_sigaction(int signo, const struct sigaction *act, struct sigaction *oldact)
-{
-    if (!act)
-        return __sys_sigaction(signo, act, oldact);
-
-    /*
-     * Detect layout: if the 4 bytes at offset 8 have any bits set above bit 7,
-     * this struct was built using Linux's POSIX layout (sa_mask at offset 8).
-     * Valid FreeBSD sa_flags values fit in bits 0-7 (≤ 0xFF).
-     * WTF adds the signal to its sa_mask via sigaddset, producing values like
-     * 0x20000000 (for signal 30) which are invalid FreeBSD sa_flags → EINVAL.
-     * Native FreeBSD structs (from Bun's crash handler etc.) have valid sa_flags
-     * ≤ 0xFF at offset 8, so they pass through unchanged.
-     */
-    {
-        int probe;
-        __builtin_memcpy(&probe, (const unsigned char*)act + 8, sizeof(probe));
-        if (!(probe & ~0xFF))
-            return __sys_sigaction(signo, act, oldact); /* already FreeBSD layout */
-    }
-
-    /*
-     * WTF was compiled on Linux with the POSIX struct sigaction layout:
-     *   offset  0:   sa_handler / sa_sigaction  (8 bytes)
-     *   offset  8:   sa_mask (sigset_t, 128 bytes on Linux)
-     *   offset 136:  sa_flags (int, 4 bytes) — Linux values
-     *   offset 140:  sa_restorer (Linux-specific, 8 bytes)
-     *
-     * FreeBSD struct sigaction layout:
-     *   offset  0:   sa_handler / sa_sigaction  (8 bytes)
-     *   offset  8:   sa_flags (int, 4 bytes) — FreeBSD values
-     *   offset 12:   (4 bytes padding)
-     *   offset 16:   sa_mask (sigset_t, 16 bytes)
-     *
-     * WTF calls sigaddset(&struct[8], signo) which sets bit (signo-1) in the
-     * Linux sa_mask.  On FreeBSD sigaddset writes word 0 = 0x20000000 (for
-     * signal 30) which the kernel reads as sa_flags — an invalid value → EINVAL.
-     *
-     * Translate: extract the real Linux sa_flags from offset 136, convert to
-     * FreeBSD values, copy the first 16 bytes of the Linux sa_mask into the
-     * FreeBSD sa_mask, and call __sys_sigaction with the native struct.
-     */
-    const unsigned char *in = (const unsigned char*)act;
-
-    /* Linux POSIX sa_flags at offset 136 (int). */
-    int linux_flags;
-    __builtin_memcpy(&linux_flags, in + 136, sizeof(linux_flags));
-
-    /* Translate Linux sa_flags bit values to FreeBSD equivalents. */
-    int freebsd_flags = 0;
+/* Linux sa_flags bit values (differ from FreeBSD). */
 #define L_SA_SIGINFO    0x00000004
 #define L_SA_ONSTACK    0x08000000
 #define L_SA_RESTART    0x10000000
 #define L_SA_NODEFER    0x40000000
 #define L_SA_RESETHAND  0x80000000
 #define L_SA_NOCLDSTOP  0x00000001
+/* FreeBSD sa_flags bit values. */
 #define F_SA_ONSTACK    0x0001
 #define F_SA_RESTART    0x0002
 #define F_SA_RESETHAND  0x0004
@@ -468,6 +410,45 @@ int bun_interceptor_sigaction(int signo, const struct sigaction *act, struct sig
 #define F_SA_NODEFER    0x0010
 #define F_SA_NOCLDWAIT  0x0020
 #define F_SA_SIGINFO    0x0040
+
+/*
+ * Translate a Linux-layout struct sigaction to FreeBSD and call __sys_sigaction.
+ *
+ * Linux struct:
+ *   offset   0: sa_handler/sa_sigaction (8 bytes)
+ *   offset   8: sa_mask (sigset_t, 128 bytes)
+ *   offset 136: sa_flags (int)
+ *   offset 140: sa_restorer (pointer)
+ * FreeBSD struct:
+ *   offset   0: sa_handler/sa_sigaction (8 bytes)
+ *   offset   8: sa_flags (int)
+ *   offset  12: padding
+ *   offset  16: sa_mask (sigset_t, 16 bytes)
+ *
+ * Detection: if int at offset 8 has bits above 0xFF set, the caller is using
+ * Linux layout (because their sa_mask bytes leak into our sa_flags slot).
+ * Native FreeBSD callers always have valid sa_flags <= 0xFF.
+ */
+static int translate_sigaction(int signo, const struct sigaction *act, struct sigaction *oldact)
+{
+    if (!act)
+        return __sys_sigaction(signo, act, oldact);
+
+    /* Quick check: is this already a FreeBSD-layout struct? */
+    {
+        int probe;
+        __builtin_memcpy(&probe, (const unsigned char*)act + 8, sizeof(probe));
+        if (!(probe & ~0xFF))
+            return __sys_sigaction(signo, act, oldact);
+    }
+
+    const unsigned char *in = (const unsigned char*)act;
+
+    /* Linux sa_flags at offset 136. */
+    int linux_flags;
+    __builtin_memcpy(&linux_flags, in + 136, sizeof(linux_flags));
+
+    int freebsd_flags = 0;
     if (linux_flags & L_SA_SIGINFO)    freebsd_flags |= F_SA_SIGINFO;
     if (linux_flags & L_SA_ONSTACK)    freebsd_flags |= F_SA_ONSTACK;
     if (linux_flags & L_SA_RESTART)    freebsd_flags |= F_SA_RESTART;
@@ -475,18 +456,35 @@ int bun_interceptor_sigaction(int signo, const struct sigaction *act, struct sig
     if (linux_flags & L_SA_RESETHAND)  freebsd_flags |= F_SA_RESETHAND;
     if (linux_flags & L_SA_NOCLDSTOP)  freebsd_flags |= F_SA_NOCLDSTOP;
 
-    /* Build a native FreeBSD sigaction on the stack. */
     struct sigaction native_sa;
     __builtin_memset(&native_sa, 0, sizeof(native_sa));
-    /* handler/sa_sigaction is at offset 0 in both layouts. */
     __builtin_memcpy(&native_sa, in, sizeof(void*));
     native_sa.sa_flags = freebsd_flags;
-    /* Linux sa_mask at offset 8 for 128 bytes; FreeBSD sa_mask is 16 bytes
-     * and uses the same bit numbering (signal N at bit N-1). The first 16
-     * bytes of the Linux sa_mask map directly to the 16-byte FreeBSD sa_mask. */
+    /* First 16 bytes of Linux sa_mask → FreeBSD sa_mask. */
     __builtin_memcpy(&native_sa.sa_mask, in + 8, sizeof(native_sa.sa_mask));
 
     return __sys_sigaction(signo, &native_sa, oldact);
+}
+
+/* Sanitizer-instrumented code calls __interceptor_sigaction instead of sigaction. */
+__attribute__((visibility("default")))
+int bun_interceptor_sigaction(int signo, const struct sigaction *act, struct sigaction *oldact)
+    __asm__("__interceptor_sigaction");
+
+int bun_interceptor_sigaction(int signo, const struct sigaction *act, struct sigaction *oldact)
+{
+    return translate_sigaction(signo, act, oldact);
+}
+
+/* Non-instrumented code calls sigaction directly. */
+__attribute__((visibility("default")))
+int bun_sigaction_interpose(int signo, const struct sigaction *act, struct sigaction *oldact)
+    __asm__("sigaction");
+
+__attribute__((visibility("default")))
+int bun_sigaction_interpose(int signo, const struct sigaction *act, struct sigaction *oldact)
+{
+    return translate_sigaction(signo, act, oldact);
 }
 
 /* --- mmap Linux→FreeBSD flag translation --- */
@@ -621,66 +619,6 @@ int bun_freebsd_clock_gettime(clockid_t clk_id, struct timespec *tp)
         break;
     }
     return __sys_clock_gettime(clk_id, tp);
-}
-
-/* --- sigaction Linux→FreeBSD struct layout translation --- */
-/* The precompiled Linux WTF library calls plain sigaction() with a Linux
- * struct sigaction layout.  Translate the same way as __interceptor_sigaction.
- *
- * Linux struct:
- *   offset   0: sa_handler/sa_sigaction (8 bytes)
- *   offset   8: sa_mask (sigset_t, 128 bytes)
- *   offset 136: sa_flags (int)
- *   offset 140: sa_restorer (pointer)
- * FreeBSD struct:
- *   offset   0: sa_handler/sa_sigaction (8 bytes)
- *   offset   8: sa_flags (int)
- *   offset  12: padding
- *   offset  16: sa_mask (sigset_t, 16 bytes)
- *
- * Detection: if int at offset 8 has bits above 0xFF set, the caller is using
- * Linux layout (because their sa_mask bytes leak into our sa_flags slot).
- * Native FreeBSD callers always have valid sa_flags ≤ 0xFF.
- *
- * NOTE: __interceptor_sigaction (above) does the same thing — sanitizer-
- * instrumented code calls __interceptor_sigaction; non-instrumented code
- * calls sigaction directly.  Our build strips sanitizers, so we need both. */
-__attribute__((visibility("default")))
-int bun_sigaction_interpose(int signo, const struct sigaction *act, struct sigaction *oldact)
-    __asm__("sigaction");
-
-__attribute__((visibility("default")))
-int bun_sigaction_interpose(int signo, const struct sigaction *act, struct sigaction *oldact)
-{
-    if (!act)
-        return __sys_sigaction(signo, act, oldact);
-
-    {
-        int probe;
-        __builtin_memcpy(&probe, (const unsigned char*)act + 8, sizeof(probe));
-        if (!(probe & ~0xFF))
-            return __sys_sigaction(signo, act, oldact); /* already FreeBSD layout */
-    }
-
-    const unsigned char *in = (const unsigned char*)act;
-    int linux_flags;
-    __builtin_memcpy(&linux_flags, in + 136, sizeof(linux_flags));
-
-    int freebsd_flags = 0;
-    if (linux_flags & L_SA_SIGINFO)    freebsd_flags |= F_SA_SIGINFO;
-    if (linux_flags & L_SA_ONSTACK)    freebsd_flags |= F_SA_ONSTACK;
-    if (linux_flags & L_SA_RESTART)    freebsd_flags |= F_SA_RESTART;
-    if (linux_flags & L_SA_NODEFER)    freebsd_flags |= F_SA_NODEFER;
-    if (linux_flags & L_SA_RESETHAND)  freebsd_flags |= F_SA_RESETHAND;
-    if (linux_flags & L_SA_NOCLDSTOP)  freebsd_flags |= F_SA_NOCLDSTOP;
-
-    struct sigaction native_sa;
-    __builtin_memset(&native_sa, 0, sizeof(native_sa));
-    __builtin_memcpy(&native_sa, in, sizeof(void*));
-    native_sa.sa_flags = freebsd_flags;
-    __builtin_memcpy(&native_sa.sa_mask, in + 8, sizeof(native_sa.sa_mask));
-
-    return __sys_sigaction(signo, &native_sa, oldact);
 }
 
 /* --- getauxval --- */

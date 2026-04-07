@@ -202,13 +202,23 @@ const config_cli = [
   path.join(TMP_DIR, "modules_out"),
 ];
 verbose("running: ", config_cli);
-// Use child_process.spawnSync for portability (Bun.spawnSync can fail under Linux compat on FreeBSD)
-const _spawnOut = _nodeSpawnSync(config_cli[0], config_cli.slice(1), {
-  cwd: process.cwd(),
-  env: process.env,
-  stdio: ["pipe", "pipe", "pipe"],
-});
-const out = { exitCode: _spawnOut.status ?? 1, stderr: _spawnOut.stderr };
+// FreeBSD: Bun.spawnSync can fail under Linux compat; use child_process instead.
+const out =
+  process.platform === "freebsd"
+    ? (() => {
+        const r = _nodeSpawnSync(config_cli[0], config_cli.slice(1), {
+          cwd: process.cwd(),
+          env: process.env,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        return { exitCode: r.status ?? 1, stderr: r.stderr };
+      })()
+    : Bun.spawnSync({
+        cmd: config_cli,
+        cwd: process.cwd(),
+        env: process.env,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
 if (out.exitCode !== 0) {
   console.error(out.stderr?.toString());
   process.exit(out.exitCode);
@@ -524,23 +534,50 @@ mark("Generate Code");
 
 const evalFiles = [...new Bun.Glob(path.join(BASE, "eval", "*.ts")).scanSync()];
 for (const file of evalFiles) {
-  const tmpOutFile = file + ".eval.out.js";
-  const evalDefineArgs = [
-    `--define:process.platform=${JSON.stringify(process.platform)}`,
-    `--define:process.arch=${JSON.stringify(process.arch)}`,
-  ];
-  const evalBuildResult = _nodeSpawnSync(
-    process.execPath,
-    ["build", file, "--outfile", tmpOutFile, "--target=bun", "--format=esm", ...(!debug ? ["--minify"] : []), ...evalDefineArgs],
-    { stdio: ["ignore", "pipe", "pipe"] },
-  );
-  if (evalBuildResult.status !== 0) {
-    const stderr = evalBuildResult.stderr ? evalBuildResult.stderr.toString("utf8") : "";
-    throw new Error("Failed to bundle eval file " + file + ":\n" + stderr);
+  if (process.platform === "freebsd") {
+    // FreeBSD: Bun.build() doesn't work under Linuxulator; use CLI subprocess.
+    const tmpOutFile = file + ".eval.out.js";
+    const evalDefineArgs = [
+      `--define:process.platform=${JSON.stringify(process.platform)}`,
+      `--define:process.arch=${JSON.stringify(process.arch)}`,
+    ];
+    const evalBuildResult = _nodeSpawnSync(
+      process.execPath,
+      [
+        "build",
+        file,
+        "--outfile",
+        tmpOutFile,
+        "--target=bun",
+        "--format=esm",
+        ...(!debug ? ["--minify"] : []),
+        ...evalDefineArgs,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    if (evalBuildResult.status !== 0) {
+      const stderr = evalBuildResult.stderr ? evalBuildResult.stderr.toString("utf8") : "";
+      throw new Error("Failed to bundle eval file " + file + ":\n" + stderr);
+    }
+    const evalOutput = fs.readFileSync(tmpOutFile, "utf8");
+    fs.rmSync(tmpOutFile);
+    writeIfNotChanged(path.join(CODEGEN_DIR, "eval", path.basename(file)), evalOutput);
+  } else {
+    const {
+      outputs: [output],
+    } = await Bun.build({
+      entrypoints: [file],
+      minify: !debug,
+      target: "bun",
+      format: "esm",
+      env: "disable",
+      define: {
+        "process.platform": JSON.stringify(process.platform),
+        "process.arch": JSON.stringify(process.arch),
+      },
+    });
+    writeIfNotChanged(path.join(CODEGEN_DIR, "eval", path.basename(file)), await output.text());
   }
-  const evalOutput = fs.readFileSync(tmpOutFile, "utf8");
-  fs.rmSync(tmpOutFile);
-  writeIfNotChanged(path.join(CODEGEN_DIR, "eval", path.basename(file)), evalOutput);
 }
 
 if (!silent) {

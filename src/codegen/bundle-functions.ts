@@ -285,22 +285,53 @@ $$capture_start$$(${fn.async ? "async " : ""}${
       } {${fn.source}}).$$capture_end$$;
 `,
     );
-    const tmpOutFile = tmpFile + ".out.js";
-    const defineArgs = Object.entries(define).flatMap(([k, v]) => [`--define:${k}=${v}`]);
-    const buildResult = spawnSync(
-      process.execPath,
-      ["build", tmpFile, "--outfile", tmpOutFile, "--target=bun", "--minify-syntax", "--no-minify-whitespace", "--keep-names", ...defineArgs],
-      { stdio: ["ignore", "pipe", "pipe"] },
-    );
-    if (buildResult.status !== 0) {
-      const stderr = buildResult.stderr ? buildResult.stderr.toString("utf8") : "";
-      throw new AggregateError([stderr], "Failed bundling builtin function " + fn.name + " from " + basename + ".ts");
+    let output: string;
+    if (process.platform === "freebsd") {
+      // FreeBSD: Bun.build() doesn't work under Linuxulator; use CLI subprocess.
+      const tmpOutFile = tmpFile + ".out.js";
+      const defineArgs = Object.entries(define).flatMap(([k, v]) => [`--define:${k}=${v}`]);
+      const buildResult = spawnSync(
+        process.execPath,
+        [
+          "build",
+          tmpFile,
+          "--outfile",
+          tmpOutFile,
+          "--target=bun",
+          "--minify-syntax",
+          "--no-minify-whitespace",
+          "--keep-names",
+          ...defineArgs,
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
+      if (buildResult.status !== 0) {
+        const stderr = buildResult.stderr ? buildResult.stderr.toString("utf8") : "";
+        throw new AggregateError([stderr], "Failed bundling builtin function " + fn.name + " from " + basename + ".ts");
+      }
+      if (!fs.existsSync(tmpOutFile)) {
+        throw new Error("expected output file to exist: " + tmpOutFile);
+      }
+      output = fs.readFileSync(tmpOutFile, "utf8").replaceAll("// @bun\n", "");
+      fs.rmSync(tmpOutFile);
+    } else {
+      const build = await Bun.build({
+        entrypoints: [tmpFile],
+        define,
+        target: "bun",
+        minify: { syntax: true, whitespace: false, keepNames: true },
+      });
+      if (!build.success) {
+        throw new AggregateError(
+          build.logs,
+          "Failed bundling builtin function " + fn.name + " from " + basename + ".ts",
+        );
+      }
+      if (build.outputs.length !== 1) {
+        throw new Error("expected one output");
+      }
+      output = (await build.outputs[0].text()).replaceAll("// @bun\n", "");
     }
-    if (!fs.existsSync(tmpOutFile)) {
-      throw new Error("expected output file to exist: " + tmpOutFile);
-    }
-    let output = fs.readFileSync(tmpOutFile, "utf8").replaceAll("// @bun\n", "");
-    fs.rmSync(tmpOutFile);
     let usesDebug = output.includes("$debug_log");
     let usesAssert = output.includes("$assert");
     const captured = output.match(/\$\$capture_start\$\$([\s\S]+)\.\$\$capture_end\$\$/)![1];

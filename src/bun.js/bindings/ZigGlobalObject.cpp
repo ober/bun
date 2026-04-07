@@ -276,19 +276,15 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
     static std::once_flag jsc_init_flag;
     // NOLINTBEGIN
     std::call_once(jsc_init_flag, [evalMode, envp, envc, onCrash]() {
-        fprintf(stderr, "[JSCInit] step 1: enableRestrictedOptions\n"); fflush(stderr);
         JSC::Config::enableRestrictedOptions();
 
-        fprintf(stderr, "[JSCInit] step 2: set_terminate\n"); fflush(stderr);
         std::set_terminate([]() { Zig__GlobalObject__onCrash(); });
-        fprintf(stderr, "[JSCInit] step 3: initializeMainThread\n"); fflush(stderr);
-        // Call via a FreeBSD wrapper compiled with -fexceptions so that any
-        // C++ exceptions thrown by the Linux-precompiled WTF can propagate
-        // through our unwind-tables-aware wrapper instead of hitting the
-        // -fno-unwind-tables barrier in this TU and calling std::terminate.
+#if OS(FREEBSD)
         extern void Bun_initializeMainThread_freebsd();
         Bun_initializeMainThread_freebsd();
-        fprintf(stderr, "[JSCInit] step 4: initializeMainThread done\n"); fflush(stderr);
+#else
+        WTF::initializeMainThread();
+#endif
 
 #if ASAN_ENABLED && OS(LINUX)
         {
@@ -302,7 +298,6 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
 
         // Use JSC::initialize with a callback to set Options during initialization.
         // The callback runs BEFORE IPInt::initialize() so we can configure WASM options early.
-        fprintf(stderr, "[JSCInit] step 5: JSC::initialize\n"); fflush(stderr);
         JSC::initialize([&] {
             JSC::Options::useWasm() = true;
             JSC::Options::useJIT() = true;
@@ -344,7 +339,6 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
             }
             JSC::Options::assertOptionsAreCoherent();
         }); // end JSC::initialize lambda
-        fprintf(stderr, "[JSCInit] step 6: JSC::initialize done\n"); fflush(stderr);
     }); // end std::call_once lambda
 
     // NOLINTEND

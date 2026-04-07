@@ -1055,16 +1055,35 @@ fs.writeFileSync(resolve(outDir + "/JSSink.h"), header());
 fs.writeFileSync(resolve(outDir + "/JSSink.cpp"), await implementation());
 fs.writeFileSync(resolve(outDir + "/JSSink.lut.txt"), lutInput());
 
-// Use child_process.spawnSync for FreeBSD compat
-_nodeSpawnSync(
-  process.execPath,
-  [
-    "run",
-    join(import.meta.dir, "create-hash-table.ts"),
-    resolve(outDir + "/JSSink.lut.txt"),
-    join(outDir, "JSSink.lut.h"),
-  ],
-  {
+// FreeBSD: Bun.spawnSync can fail under Linux compat; use child_process instead.
+const spawnFn = process.platform === "freebsd" ? _nodeSpawnSync : Bun.spawnSync;
+if (process.platform === "freebsd") {
+  spawnFn(
+    process.execPath,
+    [
+      "run",
+      join(import.meta.dir, "create-hash-table.ts"),
+      resolve(outDir + "/JSSink.lut.txt"),
+      join(outDir, "JSSink.lut.h"),
+    ],
+    {
+      stdio: ["inherit", "inherit", "inherit"],
+    },
+  );
+} else {
+  Bun.spawnSync(
+    [
+      process.execPath,
+      "run",
+      join(import.meta.dir, "create-hash-table.ts"),
+      resolve(outDir + "/JSSink.lut.txt"),
+      join(outDir, "JSSink.lut.h"),
+    ],
+    {
+      stdio: ["inherit", "inherit", "inherit"],
+    },
+  );
+}
     stdio: ["inherit", "inherit", "inherit"],
   },
 );

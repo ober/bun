@@ -96,9 +96,12 @@ function systemLibs(cfg: Config): string[] {
       "-L/usr/local/lib/gcc13",
       "-lgcc_s",
     );
-    if (cfg.webkit === "local") {
-      libs.push("-licudata", "-licui18n", "-licuuc");
-    }
+    // Always link system ICU on FreeBSD. The Linux prebuilt WebKit ships
+    // libicu*.a built against glibc; on FreeBSD those are unusable (they
+    // fight pthread/__cxa_throw symbols) and the version may not match the
+    // system runtime. We use FreeBSD's `/usr/local/lib/libicu*.so` instead
+    // and skip the bundled ICU libs in webkit.ts's prebuilt provides list.
+    libs.push("-licudata", "-licui18n", "-licuuc");
   }
 
   if (cfg.windows) {
