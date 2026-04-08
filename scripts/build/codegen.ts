@@ -760,13 +760,18 @@ function emitBindgenV2({ n, cfg, sources, o, dirStamp }: Ctx): void {
   // get a cryptic "multiple rules generate <unknown>" from ninja.
   // import.meta.require in bun resolves relative to the script file, not CWD.
   // Use absolute paths so bindgenv2/script.ts can find the .bindv2.ts files.
-  // FreeBSD Linuxulator: bun can't spawn child bun processes, use cfg.jsRuntime.
+  // FreeBSD Linuxulator: bun can't spawn child bun processes. Use node to run
+  // the bindgenv2 script since node can spawn child processes fine.
   const sourcesArg = sources.bindgenV2.map(s => resolve(cfg.cwd, s)).join(",");
-  const jsParts = cfg.jsRuntime.split(" ");
+  const isFreeBSD = cfg.freebsd;
+  const bindgenv2Cmd = isFreeBSD ? "node" : (cfg.jsRuntime.split(" ")[0] ?? cfg.jsRuntime);
+  const bindgenv2PreArgs = isFreeBSD
+    ? ["--experimental-strip-types", "--no-warnings"]
+    : cfg.jsRuntime.split(" ").slice(1);
   const listResult = spawnSync(
-    jsParts[0] as string,
+    bindgenv2Cmd,
     [
-      ...jsParts.slice(1),
+      ...bindgenv2PreArgs,
       script,
       "--command=list-outputs",
       `--sources=${sourcesArg}`,
