@@ -758,10 +758,18 @@ function emitBindgenV2({ n, cfg, sources, o, dirStamp }: Ctx): void {
   // If list-outputs fails (e.g. syntax error in a .bindv2.ts file), we fail
   // configure immediately with a clear error. Better to catch that here than
   // get a cryptic "multiple rules generate <unknown>" from ninja.
-  const sourcesArg = sources.bindgenV2.join(",");
+  // import.meta.require in bun resolves relative to the script file, not CWD.
+  // Use absolute paths so bindgenv2/script.ts can find the .bindv2.ts files.
+  const sourcesArg = sources.bindgenV2.map(s => resolve(cfg.cwd, s)).join(",");
   const listResult = spawnSync(
     cfg.bun,
-    ["run", script, "--command=list-outputs", `--sources=${sourcesArg}`, `--codegen-path=${cfg.codegenDir}`],
+    [
+      "run",
+      script,
+      "--command=list-outputs",
+      `--sources=${sourcesArg}`,
+      `--codegen-path=${resolve(cfg.cwd, cfg.codegenDir)}`,
+    ],
     { cwd: cfg.cwd, encoding: "utf8" },
   );
   if (listResult.status !== 0) {
