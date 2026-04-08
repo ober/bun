@@ -142,7 +142,9 @@ export function registerCodegenRules(n: Ninja, cfg: Config): void {
   n.rule("bun_install", {
     command: hostWin
       ? `cmd /c "cd /d $dir && ${bun} install --frozen-lockfile && ${touch} $stamp"`
-      : `cd $dir && ${bun} install --frozen-lockfile && ${touch} $stamp`,
+      : cfg.freebsd
+        ? `touch $stamp`
+        : `cd $dir && ${bun} install --frozen-lockfile && ${touch} $stamp`,
     description: "install $dir",
     restat: true,
     // bun install can be memory-hungry and grabs a lockfile; serialize.
@@ -298,6 +300,21 @@ export function emitCodegen(n: Ninja, cfg: Config, sources: Sources): CodegenOut
  * and restat prunes downstream when install was a no-op).
  */
 function emitBunInstall(n: Ninja, cfg: Config, pkgDir: string): string {
+  // FreeBSD: bun install fails under Linuxulator (NotDir). node_modules
+  // is synced from macOS. Just touch the stamp file.
+  if (cfg.freebsd) {
+    const stampName = pkgDir.replace(/[^A-Za-z0-9]+/g, "_");
+    const stamp = resolve(cfg.buildDir, "stamps", `install_${stampName}.stamp`);
+    n.build({
+      outputs: [stamp],
+      rule: "bun_install",
+      inputs: [],
+      orderOnlyInputs: [resolve(cfg.buildDir, "stamps", ".dir")],
+      vars: { dir: pkgDir, stamp, freebsd: "true" },
+    });
+    return stamp;
+  }
+
   const depPackageJsons = readPackageDeps(pkgDir);
   assert(depPackageJsons.length > 0, `package.json has no dependencies: ${pkgDir}/package.json`);
 

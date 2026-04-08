@@ -18,6 +18,9 @@
 // JSC::SourceCode. JSC does this, but WebCore does not seem to.
 import assert from "assert";
 import { spawnSync } from "child_process";
+// FreeBSD under Linuxulator: process.platform reports "linux". Detect via /etc files.
+const isFreeBSD =
+  process.platform === "freebsd" || fs.existsSync("/etc/freebsd-update.conf") || fs.existsSync("/etc/rc.conf");
 import fs, { readdirSync, rmSync } from "fs";
 import path from "path";
 import { sliceSourceCode } from "./builtin-parser";
@@ -286,7 +289,7 @@ $$capture_start$$(${fn.async ? "async " : ""}${
 `,
     );
     let output: string;
-    if (process.platform === "freebsd") {
+    if (isFreeBSD) {
       // FreeBSD: Bun.build() doesn't work under Linuxulator; use CLI subprocess.
       const tmpOutFile = tmpFile + ".out.js";
       const defineArgs = Object.entries(define).flatMap(([k, v]) => [`--define:${k}=${v}`]);

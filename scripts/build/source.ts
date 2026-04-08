@@ -1259,12 +1259,17 @@ function emitCargo(n: Ninja, cfg: Config, name: string, spec: CargoBuild, input:
       name,
       manifestdir: manifestDir,
       args: quoteArgs(args, hostWin),
-      // stream.ts's --env=K=V format. Values platform-quoted since ninja
+      // FreeBSD: direct shell execution, use bare K=V format.
+      // Other: stream.ts's --env=K=V format. Values platform-quoted since ninja
       // passes the command line through the host's argv parser; stream.ts
       // receives them as proper argv entries.
-      env: Object.entries(env)
-        .map(([k, v]) => `--env=${k}=${quote(v, hostWin)}`)
-        .join(" "),
+      env: cfg.freebsd
+        ? Object.entries(env)
+            .map(([k, v]) => `${k}=${quote(v, hostWin)}`)
+            .join(" ")
+        : Object.entries(env)
+            .map(([k, v]) => `--env=${k}=${quote(v, hostWin)}`)
+            .join(" "),
     },
   });
   n.phony(name, [lib]);

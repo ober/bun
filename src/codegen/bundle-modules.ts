@@ -12,6 +12,9 @@ import fs from "fs";
 import { builtinModules } from "node:module";
 import path from "path";
 import { spawnSync as _nodeSpawnSync } from "child_process";
+// FreeBSD under Linuxulator: process.platform reports "linux". Detect via /etc files.
+const isFreeBSD =
+  process.platform === "freebsd" || fs.existsSync("/etc/freebsd-update.conf") || fs.existsSync("/etc/rc.conf");
 import jsclasses from "./../bun.js/bindings/js_classes";
 import { sliceSourceCode } from "./builtin-parser";
 import { createAssertClientJS, createLogClientJS } from "./client-js";
@@ -203,22 +206,21 @@ const config_cli = [
 ];
 verbose("running: ", config_cli);
 // FreeBSD: Bun.spawnSync can fail under Linux compat; use child_process instead.
-const out =
-  process.platform === "freebsd"
-    ? (() => {
-        const r = _nodeSpawnSync(config_cli[0], config_cli.slice(1), {
-          cwd: process.cwd(),
-          env: process.env,
-          stdio: ["pipe", "pipe", "pipe"],
-        });
-        return { exitCode: r.status ?? 1, stderr: r.stderr };
-      })()
-    : Bun.spawnSync({
-        cmd: config_cli,
+const out = isFreeBSD
+  ? (() => {
+      const r = _nodeSpawnSync(config_cli[0], config_cli.slice(1), {
         cwd: process.cwd(),
         env: process.env,
         stdio: ["pipe", "pipe", "pipe"],
       });
+      return { exitCode: r.status ?? 1, stderr: r.stderr };
+    })()
+  : Bun.spawnSync({
+      cmd: config_cli,
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
 if (out.exitCode !== 0) {
   console.error(out.stderr?.toString());
   process.exit(out.exitCode);
@@ -534,7 +536,7 @@ mark("Generate Code");
 
 const evalFiles = [...new Bun.Glob(path.join(BASE, "eval", "*.ts")).scanSync()];
 for (const file of evalFiles) {
-  if (process.platform === "freebsd") {
+  if (isFreeBSD) {
     // FreeBSD: Bun.build() doesn't work under Linuxulator; use CLI subprocess.
     const tmpOutFile = file + ".eval.out.js";
     const evalDefineArgs = [

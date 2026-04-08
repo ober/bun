@@ -1,6 +1,9 @@
 import fs from "fs";
 import { join, resolve } from "path";
 import { spawnSync as _nodeSpawnSync } from "child_process";
+// FreeBSD under Linuxulator: process.platform reports "linux". Detect via /etc files.
+const isFreeBSD =
+  process.platform === "freebsd" || fs.existsSync("/etc/freebsd-update.conf") || fs.existsSync("/etc/rc.conf");
 
 const classes = ["ArrayBufferSink", "FileSink", "HTTPResponseSink", "HTTPSResponseSink", "NetworkSink"];
 
@@ -1056,8 +1059,8 @@ fs.writeFileSync(resolve(outDir + "/JSSink.cpp"), await implementation());
 fs.writeFileSync(resolve(outDir + "/JSSink.lut.txt"), lutInput());
 
 // FreeBSD: Bun.spawnSync can fail under Linux compat; use child_process instead.
-const spawnFn = process.platform === "freebsd" ? _nodeSpawnSync : Bun.spawnSync;
-if (process.platform === "freebsd") {
+const spawnFn = isFreeBSD ? _nodeSpawnSync : Bun.spawnSync;
+if (isFreeBSD) {
   spawnFn(
     process.execPath,
     [
@@ -1084,6 +1087,3 @@ if (process.platform === "freebsd") {
     },
   );
 }
-    stdio: ["inherit", "inherit", "inherit"],
-  },
-);

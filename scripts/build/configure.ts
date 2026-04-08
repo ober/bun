@@ -62,9 +62,22 @@ export function resolveToolchain(): Toolchain {
   // whatever's running us — if node, the strip-types flag comes along; if
   // bun, it's just the path. process.versions.bun distinguishes (undefined
   // in node). Pre-quoted so rule commands can splice it directly.
+  //
+  // FreeBSD Linuxulator: process.execPath reports the Linux dynamic loader
+  // (ld-linux-aarch64.so.1) instead of the bun binary. Detect this and use
+  // the full ld-linux + bun path.
   const q = (p: string) => quote(p, host.os === "windows");
-  const jsRuntime =
-    process.versions.bun !== undefined ? q(process.execPath) : `${q(process.execPath)} --experimental-strip-types`;
+  let jsRuntime: string;
+  if (process.versions.bun !== undefined) {
+    if (process.execPath.includes("ld-linux")) {
+      // Under Linuxulator: execPath is the dynamic loader, argv[1] is bun
+      jsRuntime = `${q(process.execPath)} ${q(bun)}`;
+    } else {
+      jsRuntime = q(process.execPath);
+    }
+  } else {
+    jsRuntime = `${q(process.execPath)} --experimental-strip-types`;
+  }
 
   return {
     ...llvm,

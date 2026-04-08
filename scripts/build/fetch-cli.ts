@@ -230,12 +230,26 @@ function normalizeLf(s: string): string {
  * authored against upstream which may have different trailing whitespace.
  */
 function applyPatch(dest: string, patchPath: string, patchBody: string): void {
-  const result = spawnSync("git", ["apply", "--ignore-whitespace", "--ignore-space-change", "--no-index", "-"], {
+  const normalized = normalizeLf(patchBody);
+
+  // First try: git apply (better error messages, supports --no-index)
+  let result = spawnSync("git", ["apply", "--ignore-whitespace", "--ignore-space-change", "--no-index", "-"], {
     cwd: dest,
-    input: normalizeLf(patchBody),
+    input: normalized,
     stdio: ["pipe", "ignore", "pipe"],
     encoding: "utf8",
   });
+
+  // Fallback: POSIX patch(1). FreeBSD's git apply --no-index can fail on
+  // non-repo directories; standard patch(1) works everywhere.
+  if (result.status !== 0) {
+    result = spawnSync("patch", ["-p0"], {
+      cwd: dest,
+      input: normalized,
+      stdio: ["pipe", "ignore", "pipe"],
+      encoding: "utf8",
+    });
+  }
 
   if (result.error) {
     throw new BuildError(`Failed to spawn git apply`, { cause: result.error });
