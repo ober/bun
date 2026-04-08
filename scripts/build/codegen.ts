@@ -35,7 +35,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, relative, resolve } from "node:path";
 import type { Sources } from "../glob-sources.ts";
 import type { Config } from "./config.ts";
@@ -760,36 +760,42 @@ function emitBindgenV2({ n, cfg, sources, o, dirStamp }: Ctx): void {
   // get a cryptic "multiple rules generate <unknown>" from ninja.
   // import.meta.require in bun resolves relative to the script file, not CWD.
   // Use absolute paths so bindgenv2/script.ts can find the .bindv2.ts files.
-  // FreeBSD Linuxulator: bun can't spawn child bun processes. Use node to run
-  // the bindgenv2 script since node can spawn child processes fine.
+  //
+  // FreeBSD Linuxulator: bun can't spawn child bun processes. Cache the
+  // list-outputs to a file that gets pre-populated (e.g. by running configure
+  // on macOS or Linux, or by manually calling bindgenv2).
+  const cachePath = resolve(cfg.cwd, cfg.codegenDir, ".bindgenv2-outputs");
   const sourcesArg = sources.bindgenV2.map(s => resolve(cfg.cwd, s)).join(",");
-  const isFreeBSD = cfg.freebsd;
-  const bindgenv2Cmd = isFreeBSD ? "node" : (cfg.jsRuntime.split(" ")[0] ?? cfg.jsRuntime);
-  const bindgenv2PreArgs = isFreeBSD
-    ? ["--experimental-strip-types", "--no-warnings"]
-    : cfg.jsRuntime.split(" ").slice(1);
-  const listResult = spawnSync(
-    bindgenv2Cmd,
-    [
-      ...bindgenv2PreArgs,
-      script,
-      "--command=list-outputs",
-      `--sources=${sourcesArg}`,
-      `--codegen-path=${resolve(cfg.cwd, cfg.codegenDir)}`,
-    ],
-    { cwd: cfg.cwd, encoding: "utf8" },
-  );
-  if (listResult.status !== 0) {
-    throw new BuildError(`bindgenv2 list-outputs failed (exit ${listResult.status})`, {
-      file: script,
-      hint: listResult.stderr?.trim(),
-    });
+  let allOutputs: string[];
+  try {
+    allOutputs = readFileSync(cachePath, "utf8")
+      .trim()
+      .split(";")
+      .filter(p => p.length > 0);
+  } catch {
+    const listResult = spawnSync(
+      cfg.bun,
+      [
+        "run",
+        script,
+        "--command=list-outputs",
+        `--sources=${sourcesArg}`,
+        `--codegen-path=${resolve(cfg.cwd, cfg.codegenDir)}`,
+      ],
+      { cwd: cfg.cwd, encoding: "utf8" },
+    );
+    if (listResult.status !== 0) {
+      throw new BuildError(`bindgenv2 list-outputs failed (exit ${listResult.status})`, {
+        file: script,
+        hint: listResult.stderr?.trim(),
+      });
+    }
+    allOutputs = listResult.stdout
+      .trim()
+      .split(";")
+      .filter(p => p.length > 0);
+    writeFileSync(cachePath, listResult.stdout.trim());
   }
-  // Output is semicolon-separated (CMake list format).
-  const allOutputs = listResult.stdout
-    .trim()
-    .split(";")
-    .filter(p => p.length > 0);
 
   assert(allOutputs.length > 0, "bindgenv2 list-outputs returned no files");
 
